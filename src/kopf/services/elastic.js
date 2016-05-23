@@ -3,8 +3,6 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
   function($http, $q, $timeout, $location, ExternalSettingsService,
            DebugService, AlertService) {
 
-    var checkVersion = new RegExp('(\\d)\\.(\\d)\\.(\\d)\\.*');
-
     var instance = this;
 
     this.connection = undefined;
@@ -16,8 +14,6 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
     this.autoRefreshStarted = false;
 
     this.brokenCluster = false;
-
-    this.nodeName = undefined; // node running on target host
 
     this.encodeURIComponent = function(text) {
       return encodeURIComponent(text);
@@ -34,7 +30,6 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       this.connection = undefined;
       this.connected = false;
       this.cluster = undefined;
-      this.nodeName = undefined;
     };
 
     this.getIndices = function() {
@@ -109,7 +104,6 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
               instance.connect(host + '/');
             } else {
               instance.setVersion(data.version.number);
-              instance.nodeName = data.name;
               instance.connected = true;
               if (!instance.autoRefreshStarted) {
                 instance.autoRefreshStarted = true;
@@ -141,15 +135,15 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
     };
 
     this.setVersion = function(version) {
-      this.version = {'str': version};
-      if (!checkVersion.test(version)) {
+      this.version = new Version(version);
+      if (!this.version.isValid()) {
         DebugService.debug('Invalid Elasticsearch version[' + version + ']');
         throw 'Invalid Elasticsearch version[' + version + ']';
       }
-      var parts = checkVersion.exec(version);
-      this.version.major = parseInt(parts[1]);
-      this.version.minor = parseInt(parts[2]);
-      this.version.build = parseInt(parts[3]);
+    };
+
+    this.getVersion = function() {
+      return this.version;
     };
 
     this.getHost = function() {
@@ -157,24 +151,11 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
     };
 
     this.versionCheck = function(version) {
-      if (isDefined(version)) {
-        var parts = checkVersion.exec(version);
-        var major = parseInt(parts[1]);
-        var minor = parseInt(parts[2]);
-        var build = parseInt(parts[3]);
-        var v = this.version;
-        var higherMajor = v.major > major;
-        var higherMinor = v.major == major && v.minor > minor;
-        var higherBuild = (
-        v.major == major &&
-        v.minor == minor &&
-        v.build >= build
-        );
-        return (higherMajor || higherMinor || higherBuild);
+      if (isDefined(this.version.isValid())) {
+        return this.version.isGreater(new Version(version));
       } else {
         return true;
       }
-
     };
 
     /**
@@ -592,6 +573,20 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       this.clusterRequest('GET', path, params, {}, parseHotThreads, error);
     };
 
+    /**
+     * Retrieve comples cluster mapping
+     *
+     * @callback success
+     * @callback error
+     */
+    this.getClusterMapping = function(success, error) {
+      var transformed = function(response) {
+        success(new ClusterMapping(response));
+      };
+      var path = '/_mapping';
+      this.clusterRequest('GET', path, {}, {}, transformed, error);
+    };
+
     this.getIndexMetadata = function(name, success, error) {
       var transformed = function(response) {
         success(new IndexMetadata(name, response.metadata.indices[name]));
@@ -684,27 +679,23 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       this.clusterRequest('GET', '/_aliases', {}, {}, createAliases, error);
     };
 
-    this.analyzeByField = function(index, type, field, text, success, error) {
+    function analyze(index, body, success, error) {
       var buildTokens = function(response) {
         var tokens = response.tokens.map(function(t) {
           return new Token(t.token, t.start_offset, t.end_offset, t.position);
         });
         success(tokens);
       };
-      var path = '/' + encode(index) + '/_analyze?field=';
-      path += encode(type) + '.' + encode(field);
-      this.clusterRequest('POST', path, {}, text, buildTokens, error);
+      var path = '/' + encode(index) + '/_analyze';
+      instance.clusterRequest('POST', path, {}, body, buildTokens, error);
+    }
+
+    this.analyzeByField = function(index, field, text, success, error) {
+      analyze(index, {text: text, field: field}, success, error);
     };
 
     this.analyzeByAnalyzer = function(index, analyzer, text, success, error) {
-      var buildTokens = function(response) {
-        var tokens = response.tokens.map(function(t) {
-          return new Token(t.token, t.start_offset, t.end_offset, t.position);
-        });
-        success(tokens);
-      };
-      var path = '/' + encode(index) + '/_analyze?analyzer=' + encode(analyzer);
-      this.clusterRequest('POST', path, {}, text, buildTokens, error);
+      analyze(index, {text: text, analyzer: analyzer}, success, error);
     };
 
     this.getIndexWarmers = function(index, warmer, success, error) {
@@ -786,10 +777,8 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       var host = this.connection.host;
       var params = {};
       this.addAuth(params);
-      // FIXME: remove routing_table after 2.0 cut
       $q.all([
-        $http.get(host +
-        '/_cluster/state/master_node,routing_table,routing_nodes,blocks/',
+        $http.get(host + '/_cluster/state/master_node,routing_table,blocks/',
             params),
         $http.get(host + '/_stats/docs,store', params),
         $http.get(host + '/_nodes/stats/jvm,fs,os,process', params),
@@ -797,6 +786,7 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
         $http.get(host + '/_aliases', params),
         $http.get(host + '/_cluster/health', params),
         $http.get(host + '/_nodes/_all/os,jvm', params),
+        $http.get(host, params),
       ]).then(
           function(responses) {
             try {
@@ -807,8 +797,9 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
               var aliases = responses[4].data;
               var health = responses[5].data;
               var nodes = responses[6].data;
+              var main = responses[7].data;
               var cluster = new Cluster(health, state, indexStats, nodesStats,
-                  settings, aliases, nodes);
+                  settings, aliases, nodes, main);
               success(cluster);
             } catch (exception) {
               DebugService.debug('Error parsing cluster data:', exception);

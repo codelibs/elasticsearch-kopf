@@ -2326,3 +2326,3967 @@ if (!jQuery) { throw new Error("Bootstrap requires jQuery") }
   })
 
 }(window.jQuery);
+
+// adapted from konlone's in-browser json to csv converter
+// https://github.com/konklone/json
+var csv = (function($) {
+
+    function getParam(name) {
+        name = name.replace(/[\[]/, "\\[").replace(/[\]]/, "\\]");
+        var regex = new RegExp("[\\?&]" + name + "=([^&#]*)"),
+            results = regex.exec(location.search);
+        return results == null ? "" : decodeURIComponent(results[1].replace(/\+/g, " "));
+    }
+
+    // adapted from csvkit's recursive JSON flattening mechanism:
+    // https://github.com/onyxfish/csvkit/blob/61b9c208b7665c20e9a8e95ba6eee811d04705f0/csvkit/convert/js.py#L15-L34
+
+    // depends on jquery and jquery-csv (for now)
+
+    function parse_object(obj, path) {
+        if (path == undefined)
+            path = "";
+
+        var type = $.type(obj);
+        var scalar = (type == "number" || type == "string" || type == "boolean" || type == "null");
+
+        if (type == "array" || type == "object") {
+            var d = {};
+            for (var i in obj) {
+
+                var newD = parse_object(obj[i], path + i + "/");
+                $.extend(d, newD);
+            }
+
+            return d;
+        }
+
+        else if (scalar) {
+            var d = {};
+            var endPath = path.substr(0, path.length-1);
+            d[endPath] = obj;
+            return d;
+        }
+
+        // ?
+        else return {};
+    }
+
+
+    // otherwise, just find the first one
+    function arrayFrom(json) {
+        var queue = [], next = json;
+        while (next !== undefined) {
+            if ($.type(next) == "array")
+                return next;
+            if ($.type(next) == "object") {
+              for (var key in next)
+                 queue.push(next[key]);
+            }
+            next = queue.shift();
+        }
+        // none found, consider the whole object a row
+        return [json];
+    }
+
+    // todo: add graceful error handling
+    function jsonFrom(input) {
+      var string = $.trim(input);
+      if (!string) return;
+      return JSON.parse(string);
+    }
+
+    this.doCSV = function(json) {
+        var inArray = arrayFrom(json);
+        var outArray = [];
+        for (var row in inArray)
+            outArray[outArray.length] = parse_object(inArray[row]);
+        var csv = $.csv.fromObjects(outArray);
+        return csv;
+    }
+
+    return this
+})(window.jQuery);
+
+/**
+ * jQuery-csv (jQuery Plugin)
+ * version: 0.70 (2012-11-04)
+ *
+ * This document is licensed as free software under the terms of the
+ * MIT License: http://www.opensource.org/licenses/mit-license.php
+ *
+ * Acknowledgements:
+ * The original design and influence to implement this library as a jquery
+ * plugin is influenced by jquery-json (http://code.google.com/p/jquery-json/).
+ * If you're looking to use native JSON.Stringify but want additional backwards
+ * compatibility for browsers that don't support it, I highly recommend you
+ * check it out.
+ *
+ * A special thanks goes out to rwk@acm.org for providing a lot of valuable
+ * feedback to the project including the core for the new FSM
+ * (Finite State Machine) parsers. If you're looking for a stable TSV parser
+ * be sure to take a look at jquery-tsv (http://code.google.com/p/jquery-tsv/).
+
+ * For legal purposes I'll include the "NO WARRANTY EXPRESSED OR IMPLIED.
+ * USE AT YOUR OWN RISK.". Which, in 'layman's terms' means, by using this
+ * library you are accepting responsibility if it breaks your code.
+ *
+ * Legal jargon aside, I will do my best to provide a useful and stable core
+ * that can effectively be built on.
+ *
+ * Copyrighted 2012 by Evan Plaice.
+ */
+
+RegExp.escape= function(s) {
+    return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+};
+
+(function (undefined) {
+  'use strict'
+
+  var $;
+
+  // to keep backwards compatibility
+  if (typeof jQuery !== 'undefined' && jQuery) {
+    $ = jQuery;
+  } else {
+    $ = {};
+  }
+
+
+  /**
+   * jQuery.csv.defaults
+   * Encapsulates the method paramater defaults for the CSV plugin module.
+   */
+
+  $.csv = {
+    defaults: {
+      separator:',',
+      delimiter:'"',
+      headers:true
+    },
+
+    hooks: {
+      castToScalar: function(value, state) {
+        var hasDot = /\./;
+        if (isNaN(value)) {
+          return value;
+        } else {
+          if (hasDot.test(value)) {
+            return parseFloat(value);
+          } else {
+            var integer = parseInt(value);
+            if(isNaN(integer)) {
+              return null;
+            } else {
+              return integer;
+            }
+          }
+        }
+      }
+    },
+
+    parsers: {
+      parse: function(csv, options) {
+        // cache settings
+        var separator = options.separator;
+        var delimiter = options.delimiter;
+
+        // set initial state if it's missing
+        if(!options.state.rowNum) {
+          options.state.rowNum = 1;
+        }
+        if(!options.state.colNum) {
+          options.state.colNum = 1;
+        }
+
+        // clear initial state
+        var data = [];
+        var entry = [];
+        var state = 0;
+        var value = '';
+        var exit = false;
+
+        function endOfEntry() {
+          // reset the state
+          state = 0;
+          value = '';
+
+          // if 'start' hasn't been met, don't output
+          if(options.start && options.state.rowNum < options.start) {
+            // update global state
+            entry = [];
+            options.state.rowNum++;
+            options.state.colNum = 1;
+            return;
+          }
+
+          if(options.onParseEntry === undefined) {
+            // onParseEntry hook not set
+            data.push(entry);
+          } else {
+            var hookVal = options.onParseEntry(entry, options.state); // onParseEntry Hook
+            // false skips the row, configurable through a hook
+            if(hookVal !== false) {
+              data.push(hookVal);
+            }
+          }
+          //console.log('entry:' + entry);
+
+          // cleanup
+          entry = [];
+
+          // if 'end' is met, stop parsing
+          if(options.end && options.state.rowNum >= options.end) {
+            exit = true;
+          }
+
+          // update global state
+          options.state.rowNum++;
+          options.state.colNum = 1;
+        }
+
+        function endOfValue() {
+          if(options.onParseValue === undefined) {
+            // onParseValue hook not set
+            entry.push(value);
+          } else {
+            var hook = options.onParseValue(value, options.state); // onParseValue Hook
+            // false skips the row, configurable through a hook
+            if(hook !== false) {
+              entry.push(hook);
+            }
+          }
+          //console.log('value:' + value);
+          // reset the state
+          value = '';
+          state = 0;
+          // update global state
+          options.state.colNum++;
+        }
+
+        // escape regex-specific control chars
+        var escSeparator = RegExp.escape(separator);
+        var escDelimiter = RegExp.escape(delimiter);
+
+        // compile the regEx str using the custom delimiter/separator
+        var match = /(D|S|\r\n|\n|\r|[^DS\r\n]+)/;
+        var matchSrc = match.source;
+        matchSrc = matchSrc.replace(/S/g, escSeparator);
+        matchSrc = matchSrc.replace(/D/g, escDelimiter);
+        match = RegExp(matchSrc, 'gm');
+
+        // put on your fancy pants...
+        // process control chars individually, use look-ahead on non-control chars
+        csv.replace(match, function (m0) {
+          if(exit) {
+            return;
+          }
+          switch (state) {
+            // the start of a value
+            case 0:
+              // null last value
+              if (m0 === separator) {
+                value += '';
+                endOfValue();
+                break;
+              }
+              // opening delimiter
+              if (m0 === delimiter) {
+                state = 1;
+                break;
+              }
+              // null last value
+              if (/^(\r\n|\n|\r)$/.test(m0)) {
+                endOfValue();
+                endOfEntry();
+                break;
+              }
+              // un-delimited value
+              value += m0;
+              state = 3;
+              break;
+
+            // delimited input
+            case 1:
+              // second delimiter? check further
+              if (m0 === delimiter) {
+                state = 2;
+                break;
+              }
+              // delimited data
+              value += m0;
+              state = 1;
+              break;
+
+            // delimiter found in delimited input
+            case 2:
+              // escaped delimiter?
+              if (m0 === delimiter) {
+                value += m0;
+                state = 1;
+                break;
+              }
+              // null value
+              if (m0 === separator) {
+                endOfValue();
+                break;
+              }
+              // end of entry
+              if (/^(\r\n|\n|\r)$/.test(m0)) {
+                endOfValue();
+                endOfEntry();
+                break;
+              }
+              // broken paser?
+              throw new Error('CSVDataError: Illegal State [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+
+            // un-delimited input
+            case 3:
+              // null last value
+              if (m0 === separator) {
+                endOfValue();
+                break;
+              }
+              // end of entry
+              if (/^(\r\n|\n|\r)$/.test(m0)) {
+                endOfValue();
+                endOfEntry();
+                break;
+              }
+              if (m0 === delimiter) {
+              // non-compliant data
+                throw new Error('CSVDataError: Illegal Quote [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+              }
+              // broken parser?
+              throw new Error('CSVDataError: Illegal Data [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+            default:
+              // shenanigans
+              throw new Error('CSVDataError: Unknown State [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+          }
+          //console.log('val:' + m0 + ' state:' + state);
+        });
+
+        // submit the last entry
+        // ignore null last line
+        if(entry.length !== 0) {
+          endOfValue();
+          endOfEntry();
+        }
+
+        return data;
+      },
+
+      // a csv-specific line splitter
+      splitLines: function(csv, options) {
+        // cache settings
+        var separator = options.separator;
+        var delimiter = options.delimiter;
+
+        // set initial state if it's missing
+        if(!options.state.rowNum) {
+          options.state.rowNum = 1;
+        }
+
+        // clear initial state
+        var entries = [];
+        var state = 0;
+        var entry = '';
+        var exit = false;
+
+        function endOfLine() {
+          // reset the state
+          state = 0;
+
+          // if 'start' hasn't been met, don't output
+          if(options.start && options.state.rowNum < options.start) {
+            // update global state
+            entry = '';
+            options.state.rowNum++;
+            return;
+          }
+
+          if(options.onParseEntry === undefined) {
+            // onParseEntry hook not set
+            entries.push(entry);
+          } else {
+            var hookVal = options.onParseEntry(entry, options.state); // onParseEntry Hook
+            // false skips the row, configurable through a hook
+            if(hookVal !== false) {
+              entries.push(hookVal);
+            }
+          }
+
+          // cleanup
+          entry = '';
+
+          // if 'end' is met, stop parsing
+          if(options.end && options.state.rowNum >= options.end) {
+            exit = true;
+          }
+
+          // update global state
+          options.state.rowNum++;
+        }
+
+        // escape regex-specific control chars
+        var escSeparator = RegExp.escape(separator);
+        var escDelimiter = RegExp.escape(delimiter);
+
+        // compile the regEx str using the custom delimiter/separator
+        var match = /(D|S|\n|\r|[^DS\r\n]+)/;
+        var matchSrc = match.source;
+        matchSrc = matchSrc.replace(/S/g, escSeparator);
+        matchSrc = matchSrc.replace(/D/g, escDelimiter);
+        match = RegExp(matchSrc, 'gm');
+
+        // put on your fancy pants...
+        // process control chars individually, use look-ahead on non-control chars
+        csv.replace(match, function (m0) {
+          if(exit) {
+            return;
+          }
+          switch (state) {
+            // the start of a value/entry
+            case 0:
+              // null value
+              if (m0 === separator) {
+                entry += m0;
+                state = 0;
+                break;
+              }
+              // opening delimiter
+              if (m0 === delimiter) {
+                entry += m0;
+                state = 1;
+                break;
+              }
+              // end of line
+              if (m0 === '\n') {
+                endOfLine();
+                break;
+              }
+              // phantom carriage return
+              if (/^\r$/.test(m0)) {
+                break;
+              }
+              // un-delimit value
+              entry += m0;
+              state = 3;
+              break;
+
+            // delimited input
+            case 1:
+              // second delimiter? check further
+              if (m0 === delimiter) {
+                entry += m0;
+                state = 2;
+                break;
+              }
+              // delimited data
+              entry += m0;
+              state = 1;
+              break;
+
+            // delimiter found in delimited input
+            case 2:
+              // escaped delimiter?
+              var prevChar = entry.substr(entry.length - 1);
+              if (m0 === delimiter && prevChar === delimiter) {
+                entry += m0;
+                state = 1;
+                break;
+              }
+              // end of value
+              if (m0 === separator) {
+                entry += m0;
+                state = 0;
+                break;
+              }
+              // end of line
+              if (m0 === '\n') {
+                endOfLine();
+                break;
+              }
+              // phantom carriage return
+              if (m0 === '\r') {
+                break;
+              }
+              // broken paser?
+              throw new Error('CSVDataError: Illegal state [Row:' + options.state.rowNum + ']');
+
+            // un-delimited input
+            case 3:
+              // null value
+              if (m0 === separator) {
+                entry += m0;
+                state = 0;
+                break;
+              }
+              // end of line
+              if (m0 === '\n') {
+                endOfLine();
+                break;
+              }
+              // phantom carriage return
+              if (m0 === '\r') {
+                break;
+              }
+              // non-compliant data
+              if (m0 === delimiter) {
+                throw new Error('CSVDataError: Illegal quote [Row:' + options.state.rowNum + ']');
+              }
+              // broken parser?
+              throw new Error('CSVDataError: Illegal state [Row:' + options.state.rowNum + ']');
+            default:
+              // shenanigans
+              throw new Error('CSVDataError: Unknown state [Row:' + options.state.rowNum + ']');
+          }
+          //console.log('val:' + m0 + ' state:' + state);
+        });
+
+        // submit the last entry
+        // ignore null last line
+        if(entry !== '') {
+          endOfLine();
+        }
+
+        return entries;
+      },
+
+      // a csv entry parser
+      parseEntry: function(csv, options) {
+        // cache settings
+        var separator = options.separator;
+        var delimiter = options.delimiter;
+
+        // set initial state if it's missing
+        if(!options.state.rowNum) {
+          options.state.rowNum = 1;
+        }
+        if(!options.state.colNum) {
+          options.state.colNum = 1;
+        }
+
+        // clear initial state
+        var entry = [];
+        var state = 0;
+        var value = '';
+
+        function endOfValue() {
+          if(options.onParseValue === undefined) {
+            // onParseValue hook not set
+            entry.push(value);
+          } else {
+            var hook = options.onParseValue(value, options.state); // onParseValue Hook
+            // false skips the value, configurable through a hook
+            if(hook !== false) {
+              entry.push(hook);
+            }
+          }
+          // reset the state
+          value = '';
+          state = 0;
+          // update global state
+          options.state.colNum++;
+        }
+
+        // checked for a cached regEx first
+        if(!options.match) {
+          // escape regex-specific control chars
+          var escSeparator = RegExp.escape(separator);
+          var escDelimiter = RegExp.escape(delimiter);
+
+          // compile the regEx str using the custom delimiter/separator
+          var match = /(D|S|\n|\r|[^DS\r\n]+)/;
+          var matchSrc = match.source;
+          matchSrc = matchSrc.replace(/S/g, escSeparator);
+          matchSrc = matchSrc.replace(/D/g, escDelimiter);
+          options.match = RegExp(matchSrc, 'gm');
+        }
+
+        // put on your fancy pants...
+        // process control chars individually, use look-ahead on non-control chars
+        csv.replace(options.match, function (m0) {
+          switch (state) {
+            // the start of a value
+            case 0:
+              // null last value
+              if (m0 === separator) {
+                value += '';
+                endOfValue();
+                break;
+              }
+              // opening delimiter
+              if (m0 === delimiter) {
+                state = 1;
+                break;
+              }
+              // skip un-delimited new-lines
+              if (m0 === '\n' || m0 === '\r') {
+                break;
+              }
+              // un-delimited value
+              value += m0;
+              state = 3;
+              break;
+
+            // delimited input
+            case 1:
+              // second delimiter? check further
+              if (m0 === delimiter) {
+                state = 2;
+                break;
+              }
+              // delimited data
+              value += m0;
+              state = 1;
+              break;
+
+            // delimiter found in delimited input
+            case 2:
+              // escaped delimiter?
+              if (m0 === delimiter) {
+                value += m0;
+                state = 1;
+                break;
+              }
+              // null value
+              if (m0 === separator) {
+                endOfValue();
+                break;
+              }
+              // skip un-delimited new-lines
+              if (m0 === '\n' || m0 === '\r') {
+                break;
+              }
+              // broken paser?
+              throw new Error('CSVDataError: Illegal State [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+
+            // un-delimited input
+            case 3:
+              // null last value
+              if (m0 === separator) {
+                endOfValue();
+                break;
+              }
+              // skip un-delimited new-lines
+              if (m0 === '\n' || m0 === '\r') {
+                break;
+              }
+              // non-compliant data
+              if (m0 === delimiter) {
+                throw new Error('CSVDataError: Illegal Quote [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+              }
+              // broken parser?
+              throw new Error('CSVDataError: Illegal Data [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+            default:
+              // shenanigans
+              throw new Error('CSVDataError: Unknown State [Row:' + options.state.rowNum + '][Col:' + options.state.colNum + ']');
+          }
+          //console.log('val:' + m0 + ' state:' + state);
+        });
+
+        // submit the last value
+        endOfValue();
+
+        return entry;
+      }
+    },
+
+    helpers: {
+
+      /**
+       * $.csv.helpers.collectPropertyNames(objectsArray)
+       * Collects all unique property names from all passed objects.
+       *
+       * @param {Array} objects Objects to collect properties from.
+       *
+       * Returns an array of property names (array will be empty,
+       * if objects have no own properties).
+       */
+      collectPropertyNames: function (objects) {
+
+        var o, propName, props = [];
+        for (o in objects) {
+          for (propName in objects[o]) {
+            if ((objects[o].hasOwnProperty(propName))
+                && (props.indexOf(propName) < 0)
+                && (typeof objects[o][propName] !== 'function')) {
+
+              props.push(propName);
+            }
+          }
+        }
+        return props;
+      }
+    },
+
+    /**
+     * $.csv.toArray(csv)
+     * Converts a CSV entry string to a javascript array.
+     *
+     * @param {Array} csv The string containing the CSV data.
+     * @param {Object} [options] An object containing user-defined options.
+     * @param {Character} [separator] An override for the separator character. Defaults to a comma(,).
+     * @param {Character} [delimiter] An override for the delimiter character. Defaults to a double-quote(").
+     *
+     * This method deals with simple CSV strings only. It's useful if you only
+     * need to parse a single entry. If you need to parse more than one line,
+     * use $.csv2Array instead.
+     */
+    toArray: function(csv, options, callback) {
+      var options = (options !== undefined ? options : {});
+      var config = {};
+      config.callback = ((callback !== undefined && typeof(callback) === 'function') ? callback : false);
+      config.separator = 'separator' in options ? options.separator : $.csv.defaults.separator;
+      config.delimiter = 'delimiter' in options ? options.delimiter : $.csv.defaults.delimiter;
+      var state = (options.state !== undefined ? options.state : {});
+
+      // setup
+      var options = {
+        delimiter: config.delimiter,
+        separator: config.separator,
+        onParseEntry: options.onParseEntry,
+        onParseValue: options.onParseValue,
+        state: state
+      }
+
+      var entry = $.csv.parsers.parseEntry(csv, options);
+
+      // push the value to a callback if one is defined
+      if(!config.callback) {
+        return entry;
+      } else {
+        config.callback('', entry);
+      }
+    },
+
+    /**
+     * $.csv.toArrays(csv)
+     * Converts a CSV string to a javascript array.
+     *
+     * @param {String} csv The string containing the raw CSV data.
+     * @param {Object} [options] An object containing user-defined options.
+     * @param {Character} [separator] An override for the separator character. Defaults to a comma(,).
+     * @param {Character} [delimiter] An override for the delimiter character. Defaults to a double-quote(").
+     *
+     * This method deals with multi-line CSV. The breakdown is simple. The first
+     * dimension of the array represents the line (or entry/row) while the second
+     * dimension contains the values (or values/columns).
+     */
+    toArrays: function(csv, options, callback) {
+      var options = (options !== undefined ? options : {});
+      var config = {};
+      config.callback = ((callback !== undefined && typeof(callback) === 'function') ? callback : false);
+      config.separator = 'separator' in options ? options.separator : $.csv.defaults.separator;
+      config.delimiter = 'delimiter' in options ? options.delimiter : $.csv.defaults.delimiter;
+
+      // setup
+      var data = [];
+      var options = {
+        delimiter: config.delimiter,
+        separator: config.separator,
+        onPreParse: options.onPreParse,
+        onParseEntry: options.onParseEntry,
+        onParseValue: options.onParseValue,
+        onPostParse: options.onPostParse,
+        start: options.start,
+        end: options.end,
+        state: {
+          rowNum: 1,
+          colNum: 1
+        }
+      };
+
+      // onPreParse hook
+      if(options.onPreParse !== undefined) {
+        options.onPreParse(csv, options.state);
+      }
+
+      // parse the data
+      data = $.csv.parsers.parse(csv, options);
+
+      // onPostParse hook
+      if(options.onPostParse !== undefined) {
+        options.onPostParse(data, options.state);
+      }
+
+      // push the value to a callback if one is defined
+      if(!config.callback) {
+        return data;
+      } else {
+        config.callback('', data);
+      }
+    },
+
+    /**
+     * $.csv.toObjects(csv)
+     * Converts a CSV string to a javascript object.
+     * @param {String} csv The string containing the raw CSV data.
+     * @param {Object} [options] An object containing user-defined options.
+     * @param {Character} [separator] An override for the separator character. Defaults to a comma(,).
+     * @param {Character} [delimiter] An override for the delimiter character. Defaults to a double-quote(").
+     * @param {Boolean} [headers] Indicates whether the data contains a header line. Defaults to true.
+     *
+     * This method deals with multi-line CSV strings. Where the headers line is
+     * used as the key for each value per entry.
+     */
+    toObjects: function(csv, options, callback) {
+      var options = (options !== undefined ? options : {});
+      var config = {};
+      config.callback = ((callback !== undefined && typeof(callback) === 'function') ? callback : false);
+      config.separator = 'separator' in options ? options.separator : $.csv.defaults.separator;
+      config.delimiter = 'delimiter' in options ? options.delimiter : $.csv.defaults.delimiter;
+      config.headers = 'headers' in options ? options.headers : $.csv.defaults.headers;
+      options.start = 'start' in options ? options.start : 1;
+
+      // account for headers
+      if(config.headers) {
+        options.start++;
+      }
+      if(options.end && config.headers) {
+        options.end++;
+      }
+
+      // setup
+      var lines = [];
+      var data = [];
+
+      var options = {
+        delimiter: config.delimiter,
+        separator: config.separator,
+        onPreParse: options.onPreParse,
+        onParseEntry: options.onParseEntry,
+        onParseValue: options.onParseValue,
+        onPostParse: options.onPostParse,
+        start: options.start,
+        end: options.end,
+        state: {
+          rowNum: 1,
+          colNum: 1
+        },
+        match: false,
+        transform: options.transform
+      };
+
+      // fetch the headers
+      var headerOptions = {
+        delimiter: config.delimiter,
+        separator: config.separator,
+        start: 1,
+        end: 1,
+        state: {
+          rowNum:1,
+          colNum:1
+        }
+      }
+
+      // onPreParse hook
+      if(options.onPreParse !== undefined) {
+        options.onPreParse(csv, options.state);
+      }
+
+      // parse the csv
+      var headerLine = $.csv.parsers.splitLines(csv, headerOptions);
+      var headers = $.csv.toArray(headerLine[0], options);
+
+      // fetch the data
+      var lines = $.csv.parsers.splitLines(csv, options);
+
+      // reset the state for re-use
+      options.state.colNum = 1;
+      if(headers){
+        options.state.rowNum = 2;
+      } else {
+        options.state.rowNum = 1;
+      }
+
+      // convert data to objects
+      for(var i=0, len=lines.length; i<len; i++) {
+        var entry = $.csv.toArray(lines[i], options);
+        var object = {};
+        for(var j in headers) {
+          object[headers[j]] = entry[j];
+        }
+        if (options.transform !== undefined) {
+          data.push(options.transform.call(undefined, object));
+        } else {
+          data.push(object);
+        }
+
+        // update row state
+        options.state.rowNum++;
+      }
+
+      // onPostParse hook
+      if(options.onPostParse !== undefined) {
+        options.onPostParse(data, options.state);
+      }
+
+      // push the value to a callback if one is defined
+      if(!config.callback) {
+        return data;
+      } else {
+        config.callback('', data);
+      }
+    },
+
+     /**
+     * $.csv.fromArrays(arrays)
+     * Converts a javascript array to a CSV String.
+     *
+     * @param {Array} arrays An array containing an array of CSV entries.
+     * @param {Object} [options] An object containing user-defined options.
+     * @param {Character} [separator] An override for the separator character. Defaults to a comma(,).
+     * @param {Character} [delimiter] An override for the delimiter character. Defaults to a double-quote(").
+     *
+     * This method generates a CSV file from an array of arrays (representing entries).
+     */
+    fromArrays: function(arrays, options, callback) {
+      var options = (options !== undefined ? options : {});
+      var config = {};
+      config.callback = ((callback !== undefined && typeof(callback) === 'function') ? callback : false);
+      config.separator = 'separator' in options ? options.separator : $.csv.defaults.separator;
+      config.delimiter = 'delimiter' in options ? options.delimiter : $.csv.defaults.delimiter;
+
+      var output = '',
+          line,
+          lineValues,
+          i, j;
+
+      for (i = 0; i < arrays.length; i++) {
+        line = arrays[i];
+        lineValues = [];
+        for (j = 0; j < line.length; j++) {
+          var strValue = (line[j] === undefined || line[j] === null)
+                       ? ''
+                       : line[j].toString();
+
+          // MODIFICATION by Eric:
+          // make the delimiter replacement global
+          // (workaround until jquery-csv is replaced entirely)
+          if (strValue.indexOf(config.delimiter) > -1) {
+            var delRegex = new RegExp(config.delimiter, "g");
+            strValue = strValue.replace(delRegex, config.delimiter + config.delimiter);
+          }
+
+          var escMatcher = '\n|\r|S|D';
+          escMatcher = escMatcher.replace('S', config.separator);
+          escMatcher = escMatcher.replace('D', config.delimiter);
+
+          if (strValue.search(escMatcher) > -1) {
+            strValue = config.delimiter + strValue + config.delimiter;
+          }
+          lineValues.push(strValue);
+        }
+        output += lineValues.join(config.separator) + '\r\n';
+      }
+
+      // push the value to a callback if one is defined
+      if(!config.callback) {
+        return output;
+      } else {
+        config.callback('', output);
+      }
+    },
+
+    /**
+     * $.csv.fromObjects(objects)
+     * Converts a javascript dictionary to a CSV string.
+     *
+     * @param {Object} objects An array of objects containing the data.
+     * @param {Object} [options] An object containing user-defined options.
+     * @param {Character} [separator] An override for the separator character. Defaults to a comma(,).
+     * @param {Character} [delimiter] An override for the delimiter character. Defaults to a double-quote(").
+     * @param {Character} [sortOrder] Sort order of columns (named after
+     *   object properties). Use 'alpha' for alphabetic. Default is 'declare',
+     *   which means, that properties will _probably_ appear in order they were
+     *   declared for the object. But without any guarantee.
+     * @param {Character or Array} [manualOrder] Manually order columns. May be
+     * a strin in a same csv format as an output or an array of header names
+     * (array items won't be parsed). All the properties, not present in
+     * `manualOrder` will be appended to the end in accordance with `sortOrder`
+     * option. So the `manualOrder` always takes preference, if present.
+     *
+     * This method generates a CSV file from an array of objects (name:value pairs).
+     * It starts by detecting the headers and adding them as the first line of
+     * the CSV file, followed by a structured dump of the data.
+     */
+    fromObjects: function(objects, options, callback) {
+      var options = (options !== undefined ? options : {});
+      var config = {};
+      config.callback = ((callback !== undefined && typeof(callback) === 'function') ? callback : false);
+      config.separator = 'separator' in options ? options.separator : $.csv.defaults.separator;
+      config.delimiter = 'delimiter' in options ? options.delimiter : $.csv.defaults.delimiter;
+      config.headers = 'headers' in options ? options.headers : $.csv.defaults.headers;
+      config.sortOrder = 'sortOrder' in options ? options.sortOrder : 'declare';
+      config.manualOrder = 'manualOrder' in options ? options.manualOrder : [];
+      config.transform = options.transform;
+
+      // added by ERIC, return just the arrays
+      config.justArrays = 'justArrays' in options ? options.justArrays : false;
+
+      if (typeof config.manualOrder === 'string') {
+        config.manualOrder = $.csv.toArray(config.manualOrder, config);
+      }
+
+      if (config.transform !== undefined) {
+        var origObjects = objects;
+        objects = [];
+
+        var i;
+        for (i = 0; i < origObjects.length; i++) {
+          objects.push(config.transform.call(undefined, origObjects[i]));
+        }
+      }
+
+      var props = $.csv.helpers.collectPropertyNames(objects);
+
+      if (config.sortOrder === 'alpha') {
+        props.sort();
+      } // else {} - nothing to do for 'declare' order
+
+      if (config.manualOrder.length > 0) {
+
+        var propsManual = [].concat(config.manualOrder);
+        var p;
+        for (p = 0; p < props.length; p++) {
+          if (propsManual.indexOf( props[p] ) < 0) {
+            propsManual.push( props[p] );
+          }
+        }
+        props = propsManual;
+      }
+
+      var o, p, line, output = [], propName;
+      if (config.headers) {
+        output.push(props);
+      }
+
+      for (o = 0; o < objects.length; o++) {
+        line = [];
+        for (p = 0; p < props.length; p++) {
+          propName = props[p];
+          if (propName in objects[o] && typeof objects[o][propName] !== 'function') {
+            line.push(objects[o][propName]);
+          } else {
+            line.push('');
+          }
+        }
+        output.push(line);
+      }
+
+      // modification by ERIC - just give me the arrays you made out of the object
+      if (config.justArrays)
+        return output;
+
+      // push the value to a callback if one is defined
+      return $.csv.fromArrays(output, options, config.callback);
+    }
+  };
+
+  // Maintenance code to maintain backward-compatibility
+  // Will be removed in release 1.0
+  $.csvEntry2Array = $.csv.toArray;
+  $.csv2Array = $.csv.toArrays;
+  $.csv2Dictionary = $.csv.toObjects;
+
+  // CommonJS module is defined
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = $.csv;
+  }
+
+}).call( this );
+
+/**
+ * The MIT License (MIT)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ * @preserve
+ */
+
+/**
+ * Implementing TreeDnD & Event DrapnDrop (allow drag multi tree-table include all type: table, ol, ul)
+ * Demo: http://thienhung1989.github.io/angular-tree-dnd
+ * Github: https://github.com/thienhung1989/angular-tree-dnd
+ * @version 3.1.0
+ * @preserve
+ * (c) 2015 Nguyuễn Thiện Hùng - <nguyenthienhung1989@gmail.com>
+ */
+(function () {
+    'use strict';
+    angular.isUndefinedOrNull = function (val) {
+        return angular.isUndefined(val) || val === null;
+    }
+
+    angular.isDefined = function (val) {
+        return !(angular.isUndefined(val) || val === null);
+    }
+
+    angular.module('ntt.TreeDnD', ['template/TreeDnD/TreeDnD.html']).constant(
+        '$TreeDnDClass', {
+            tree:   'tree-dnd',
+            empty:  'tree-dnd-empty',
+            hidden: 'tree-dnd-hidden',
+            node:   'tree-dnd-node',
+            nodes:  'tree-dnd-nodes',
+            handle: 'tree-dnd-handle',
+            place:  'tree-dnd-placeholder',
+            drag:   'tree-dnd-drag',
+            status: 'tree-dnd-status',
+            icon:   {
+                '1':  'glyphicon glyphicon-minus',
+                '0':  'glyphicon glyphicon-plus',
+                '-1': 'glyphicon glyphicon-file'
+            }
+        }
+    ).directive(
+    'compile', [
+        '$compile', function ($compile) {
+            return {
+                restrict: 'A',
+                link:     function (scope, element, attrs) {
+                    scope.$watch(
+                        attrs.compile, function (new_val) {
+                            if (new_val) {
+                                /*
+                                 * Compile creates a linking function
+                                 * that can be used with any scope.
+                                 */
+                                var link = $compile(new_val);
+                                /*
+                                 * Executing the linking function
+                                 * creates a new element.
+                                 */
+                                var new_elem = link(scope);
+                                // Which we can then append to our DOM element.
+                                if(angular.isFunction(element.empty)){
+                                    element.empty()
+                                }else{
+                                    element.html('');
+                                }
+
+                                element.append(new_elem)
+                            }
+                        }
+                    );
+                }
+            };
+        }]
+)
+    .directive(
+    'compileReplace', [
+        '$compile', function ($compile) {
+            return {
+                restrict: 'A',
+                link:     function (scope, element, attrs) {
+                    scope.$watch(
+                        attrs.compileReplace, function (new_val) {
+                            if (new_val) {
+                                /*
+                                 * Compile creates a linking function
+                                 * that can be used with any scope.
+                                 */
+                                var link = $compile(new_val);
+                                /*
+                                 * Executing the linking function
+                                 * creates a new element.
+                                 */
+                                var new_elem = link(scope);
+
+                                element.replaceWith(new_elem)
+                            }
+                        }
+                    );
+                }
+            };
+        }]
+).directive(
+    'treeDndNodeHandle', function () {
+        return {
+            restrict: 'A',
+            scope:    true,
+            link:     function (scope, element, attrs) {
+                scope.$element = element;
+                scope.$type = 'TreeDnDNodeHandle';
+                if (scope.$class.handle) {
+                    element.addClass(scope.$class.handle);
+                }
+            }
+        };
+    }
+).directive(
+    'treeDndNode', function () {
+        return {
+            restrict: 'A',
+            replace:  true,
+            link:     function (scope, element, attrs) {
+                var _enabledDragDrop = (typeof scope.dragEnabled === 'boolean' || typeof scope.dropEnabled === 'boolean');
+                scope.$modelValue = null;
+                scope.$icon_class = '';
+                scope.$node_class = '';
+
+                if (scope.$class.node) {
+                    element.addClass(scope.$class.node);
+                    scope.$node_class = scope.$class.node;
+                }
+
+                scope.$watch(
+                    attrs.treeDndNode, function (newValue, oldValue, scope) {
+                        if (_enabledDragDrop) {
+                            scope.setScope(scope, newValue);
+                        }
+                        scope.$modelValue = newValue;
+                        scope.$icon_class = scope.$class.icon[newValue.__icon__];
+                    }, true
+                );
+
+                if (_enabledDragDrop) {
+
+                    scope.$element = element;
+                    scope.$type = 'TreeDnDNode';
+
+                    scope.getScopeNode = function () {
+                        return scope;
+                    };
+
+                    scope.getData = function () {
+                        return scope.$modelValue;
+                    };
+
+                    scope.getElementChilds = function () {
+                        return angular.element(element[0].querySelector('[tree-dnd-nodes]'));
+                    };
+                }
+            }
+        };
+    }
+).directive(
+    'treeDndNodes', function () {
+        return {
+            restrict: 'A',
+            replace:  true,
+            link:     function (scope, element, attrs) {
+                scope.nodes = [];
+                scope.$nodes_class = '';
+                scope.$type = 'TreeDnDNodes';
+                scope.$element = element;
+                scope.getScopeNode = null;
+
+                scope.$watch(
+                    attrs.treeDndNodes, function (newValue, oldValue, scope) {
+                        scope.nodes = newValue;
+                    }, true
+                );
+
+                if (scope.$class.nodes) {
+                    element.addClass(scope.$class.nodes);
+                    scope.$nodes_class = scope.$class.nodes;
+                }
+            }
+        };
+    }
+).directive(
+    'treeDnd', [
+        '$injector', '$timeout', '$http', '$compile', '$window', '$document', '$templateCache',
+        '$TreeDnDTemplate', '$TreeDnDClass', '$TreeDnDHelper', '$TreeDnDPlugin',
+        function ($injector, $timeout, $http, $compile, $window, $document, $templateCache,
+                  $TreeDnDTemplate, $TreeDnDClass, $TreeDnDHelper, $TreeDnDPlugin) {
+            return {
+                restrict:   'E',
+                scope:      true,
+                replace:    true,
+                controller: [
+                    '$scope', '$element', '$attrs', function ($scope, $element, $attrs) {
+                        $scope.indent = 20;
+                        $scope.indent_plus = 15;
+                        $scope.indent_unit = 'px';
+                        $scope.$tree_class = 'table';
+                        $scope.primary_key = '__uid__';
+
+
+                        $scope.$type = 'TreeDnD';
+                        // $scope.enabledFilter = null;
+                        $scope.colDefinitions = [];
+                        $scope.$globals = {};
+                        $scope.$class = {};
+
+                        $scope.treeData = [];
+                        $scope.tree_nodes = [];
+
+                        $scope.sycning = false;
+
+                        $scope.$class = angular.copy($TreeDnDClass);
+                        angular.extend(
+                            $scope.$class.icon, {
+                                '1':  $attrs.iconExpand || 'glyphicon glyphicon-minus',
+                                '0':  $attrs.iconCollapse || 'glyphicon glyphicon-plus',
+                                '-1': $attrs.iconLeaf || 'glyphicon glyphicon-file'
+                            }
+                        );
+
+                        $scope.for_all_descendants = function (node, fn) {
+                            if (angular.isFunction(fn)) {
+                                var _i, _len, _nodes;
+
+                                if (fn(node)) {
+                                    return false;
+                                }
+                                _nodes = node.__children__;
+                                _len = _nodes.length;
+                                for (_i = 0; _i < _len; _i++) {
+                                    if (!$scope.for_all_descendants(_nodes[_i], fn)) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            return true;
+                        };
+
+                        $scope.getLastDescendant = function (node) {
+                            var last_child, n;
+                            if (!node) {
+                                node = $scope.tree ? $scope.tree.selected_node : false;
+                            }
+                            if(node === false){
+                                return false;
+                            }
+                            n = node.__children__.length;
+                            if (n === 0) {
+                                return node;
+                            } else {
+                                last_child = node.__children__[n - 1];
+                                return $scope.getLastDescendant(last_child);
+                            }
+                        };
+
+                        $scope.getElementChilds = function () {
+                            return angular.element($element[0].querySelector('[tree-dnd-nodes]'));
+                        };
+
+                        $scope.onClick = function (node) {
+                            if (angular.isDefined($scope.tree) && angular.isFunction($scope.tree.on_click)) {
+                                // We want to detach from Angular's digest cycle so we can
+                                // independently measure the time for one cycle.
+                                setTimeout(
+                                    function () {
+                                        $scope.tree.on_click(node);
+                                    }, 0
+                                );
+                            }
+                        };
+
+                        $scope.onSelect = function (node) {
+                            if (angular.isDefined($scope.tree)) {
+                                if (node !== $scope.tree.selected_node) {
+                                    $scope.tree.select_node(node);
+                                }
+
+                                if (angular.isFunction($scope.tree.on_select)) {
+                                    setTimeout(
+                                        function () {
+                                            $scope.tree.on_select(node);
+                                        }, 0
+                                    );
+                                }
+                            }
+                        };
+
+                        var passedExpand, _clone;
+                        $scope.toggleExpand = function (node, fnCallback) {
+                            passedExpand = true;
+                            if (angular.isFunction(fnCallback) && !fnCallback(node)) {
+                                passedExpand = false;
+                            } else if (angular.isFunction($scope.$callbacks.expand) && !$scope.$callbacks.expand(node)) {
+                                passedExpand = false;
+                            }
+
+                            if (passedExpand) {
+                                if (node.__children__.length > 0) {
+                                    node.__expanded__ = !node.__expanded__;
+                                }
+                            }
+                        };
+
+                        $scope.getHash = function (node) {
+                            if ($scope.primary_key === '__uid__') {
+                                return '#' + node.__parent__ + '#' + node.__uid__;
+                            } else {
+                                return '#' + node.__parent__ + '#' + node[$scope.primary_key];
+                            }
+                        };
+
+                        $scope.$callbacks = {
+                            for_all_descendants: $scope.for_all_descendants,
+                            expand:              function (node) {
+                                return true;
+                            },
+                            accept:              function (dragInfo, moveTo, isChanged) {
+                                return $scope.dropEnabled === true;
+                            },
+                            calsIndent:          function (level, skipUnit, skipEdge) {
+                                var unit = 0,
+                                    edge = skipEdge ? 0 : $scope.indent_plus;
+                                if (!skipUnit) {
+                                    unit = $scope.indent_unit ? $scope.indent_unit : 'px';
+                                }
+
+                                if (level - 1 < 1) {
+                                    return edge + unit;
+                                } else {
+                                    return $scope.indent * (level - 1) + edge + unit;
+                                }
+                            },
+                            droppable:           function () {
+                                return $scope.dropEnabled === true;
+                            },
+                            draggable:           function () {
+                                return $scope.dragEnabled === true;
+                            },
+                            beforeDrop:          function (event) {
+                                return true;
+                            },
+                            changeKey:           function (node) {
+                                var _key = node.__uid__;
+                                node.__uid__ = Math.random();
+                                if (node.__selected__) {
+                                    delete(node.__selected__);
+                                }
+
+                                if ($scope.primary_key !== '__uid__') {
+                                    _key = '' + node[$scope.primary_key];
+                                    _key = _key.replace(/_#.+$/g, '') + '_#' + node.__uid__;
+
+                                    node[$scope.primary_key] = _key;
+                                }
+                                // delete(node.__hashKey__);
+                            },
+                            clone:               function (node, _this) {
+                                _clone = angular.copy(node);
+                                this.for_all_descendants(_clone, this.changeKey);
+                                return _clone;
+                            },
+                            remove:              function (node, parent, _this) {
+                                return parent.splice(node.__index__, 1)[0];
+                            },
+                            add:                 function (node, pos, parent, _this) {
+                                if (parent) {
+                                    if (parent.length > -1) {
+                                        if (pos > -1) {
+                                            parent.splice(pos, 0, node);
+                                        } else {
+                                            // todo If children need load crazy
+                                            parent.push(node);
+                                        }
+                                    } else {
+                                        parent.push(node);
+                                    }
+                                }
+                            }
+                        };
+
+                        if ($attrs.enableDrag || $attrs.enableDrop) {
+                            $scope.placeElm = null;
+                            //                            $scope.dragBorder = 30;
+                            $scope.dragEnabled = null;
+                            $scope.dropEnabled = null;
+                            $scope.horizontal = null;
+
+                            if ($attrs.enableDrag) {
+
+                                $scope.dragDelay = 0;
+                                $scope.enabledMove = true;
+                                $scope.statusMove = true;
+                                $scope.enabledHotkey = false;
+                                $scope.enabledCollapse = null;
+                                $scope.statusElm = null;
+                                $scope.dragging = null;
+
+                                angular.extend(
+                                    $scope.$callbacks, {
+                                        beforeDrag: function (scopeDrag) {
+                                            return true;
+                                        },
+                                        dragStop:   function (event, skiped) {},
+                                        dropped:    function (info, pass, isMove) {
+                                            if (!info) {
+                                                return null;
+                                            }
+
+                                            if (!info.changed && isMove) {
+                                                return false;
+                                            }
+                                            var _node = info.node,
+                                                _nodeAdd = null,
+                                                _move = info.move,
+                                                _parent = null,
+                                                _parentRemove = (info.parent || info.drag.treeData),
+                                                _parentAdd = (_move.parent || info.target.treeData);
+
+                                            if (info.target.$callbacks.accept(info, info.move, info.changed)) {
+                                                if (isMove) {
+                                                    _parent = _parentRemove;
+                                                    if (angular.isDefined(_parent.__children__)) {
+                                                        _parent = _parent.__children__;
+                                                    }
+
+                                                    _nodeAdd = info.drag.$callbacks.remove(
+                                                        _node,
+                                                        _parent,
+                                                        info.drag.$callbacks
+                                                    );
+                                                } else {
+                                                    _nodeAdd = info.drag.$callbacks.clone(_node, info.drag.$callbacks);
+                                                }
+
+                                                // if node dragging change index in sample node parent
+                                                // and index node decrement
+                                                if (isMove &&
+                                                    info.drag === info.target &&
+                                                    _parentRemove === _parentAdd &&
+                                                    _move.pos >= info.node.__index__) {
+                                                    _move.pos--;
+                                                }
+
+                                                _parent = _parentAdd;
+                                                if (_parent.__children__) {
+                                                    _parent = _parent.__children__;
+                                                }
+
+                                                info.target.$callbacks.add(
+                                                    _nodeAdd,
+                                                    _move.pos,
+                                                    _parent,
+                                                    info.drag.$callbacks
+                                                );
+
+                                                return true;
+                                            }
+
+                                            return false;
+                                        },
+                                        dragStart:  function (event) {},
+                                        dragMove:   function (event) {}
+                                    }
+                                );
+
+                                $scope.setDragging = function (dragInfo) {
+                                    $scope.dragging = dragInfo;
+                                };
+
+                                $scope.enableMove = function (val) {
+                                    if (typeof val === "boolean") {
+                                        $scope.enabledMove = val;
+                                    } else {
+                                        $scope.enabledMove = true;
+                                    }
+                                };
+
+                                if ($attrs.enableStatus) {
+                                    $scope.enabledStatus = false;
+
+                                    $scope.hideStatus = function () {
+                                        if ($scope.statusElm) {
+                                            $scope.statusElm.addClass($scope.$class.hidden);
+                                        }
+                                    };
+
+                                    $scope.refreshStatus = function () {
+                                        if (!$scope.dragging) {
+                                            return;
+                                        }
+
+                                        if ($scope.enabledStatus) {
+                                            var statusElmOld = $scope.statusElm;
+                                            if ($scope.enabledMove) {
+                                                $scope.statusElm = angular.element($TreeDnDTemplate.getMove($scope));
+                                            } else {
+                                                $scope.statusElm = angular.element($TreeDnDTemplate.getCopy($scope));
+                                            }
+
+                                            if (statusElmOld !== $scope.statusElm) {
+                                                if (statusElmOld) {
+                                                    $scope.statusElm.attr('class', statusElmOld.attr('class'));
+                                                    $scope.statusElm.attr('style', statusElmOld.attr('style'));
+                                                    statusElmOld.remove();
+                                                }
+                                                $document.find('body').append($scope.statusElm);
+
+                                            }
+
+                                            $scope.statusElm.removeClass($scope.$class.hidden);
+                                        }
+                                    };
+
+                                    $scope.setPositionStatus = function (e) {
+                                        if ($scope.statusElm) {
+                                            $scope.statusElm.css(
+                                                {
+                                                    'left':    e.pageX + 10 + 'px',
+                                                    'top':     e.pageY + 15 + 'px',
+                                                    'z-index': 9999
+                                                }
+                                            );
+                                            $scope.statusElm.addClass($scope.$class.status);
+                                        }
+                                    };
+                                }
+                            }
+
+                            $scope.targeting = false;
+
+                            $scope.getPrevSibling = function (node) {
+                                if (node && node.__index__ > 0) {
+                                    var _parent, _index = node.__index__ - 1;
+
+                                    if (angular.isDefined(node.__parent_real__)) {
+                                        _parent = $scope.tree_nodes[node.__parent_real__];
+                                        return _parent.__children__[_index];
+                                    }
+                                    return $scope.treeData[_index];
+
+                                }
+                                return null;
+                            };
+
+                            $scope.getNode = function (index) {
+                                if (angular.isUndefinedOrNull(index)) {
+                                    return null;
+                                }
+                                return $scope.tree_nodes[index];
+                            };
+
+                            $scope.setScope = function (scope, node) {
+                                var _hash = $scope.getHash(node);
+                                if ($scope.$globals[_hash] !== scope) {
+                                    $scope.$globals[_hash] = scope;
+                                }
+                            };
+
+                            $scope.getScope = function (node) {
+                                if (node) {
+                                    return $scope.$globals[$scope.getHash(node)];
+                                }
+                                return $scope;
+
+                            };
+
+                            $scope.initPlace = function (element, dragElm) {
+
+                                var tagName = null,
+                                    isTable = false;
+
+                                if (element) {
+                                    tagName = element.prop('tagName').toLowerCase();
+                                    isTable = (tagName === 'tr' || tagName === 'td');
+                                } else {
+                                    tagName = $scope.getElementChilds().prop('tagName').toLowerCase();
+                                    isTable = (tagName === 'tbody' || tagName === 'table');
+                                }
+
+                                if (!$scope.placeElm) {
+
+                                    if (isTable) {
+                                        $scope.placeElm = angular.element($window.document.createElement('tr'));
+                                        var _len_down = $scope.colDefinitions.length;
+                                        $scope.placeElm.append(
+                                            angular.element($window.document.createElement('td'))
+                                                .addClass($scope.$class.empty)
+                                                .addClass('indented')
+                                                .addClass($scope.$class.place)
+                                        );
+                                        while (_len_down-- > 0) {
+                                            $scope.placeElm.append(
+                                                angular.element($window.document.createElement('td'))
+                                                    .addClass($scope.$class.empty)
+                                                    .addClass($scope.$class.place)
+                                            );
+                                        }
+                                    } else {
+                                        $scope.placeElm = angular.element($window.document.createElement('li'))
+                                            .addClass($scope.$class.empty)
+                                            .addClass($scope.$class.place);
+                                    }
+
+                                }
+
+                                if (dragElm) {
+                                    $scope.placeElm.css('height', $TreeDnDHelper.height(dragElm) + 'px');
+                                }
+
+                                if (element) {
+                                    element[0].parentNode.insertBefore($scope.placeElm[0], element[0]);
+                                } else {
+                                    $scope.getElementChilds().append($scope.placeElm);
+                                }
+
+                                return $scope.placeElm;
+                            };
+
+                            $scope.hidePlace = function () {
+                                if ($scope.placeElm) {
+                                    $scope.placeElm.addClass($scope.$class.hidden);
+                                }
+                            };
+
+                            $scope.showPlace = function () {
+                                if ($scope.placeElm) {
+                                    $scope.placeElm.removeClass($scope.$class.hidden);
+                                }
+                            };
+
+                            $scope.getScopeTree = function () {
+                                return $scope;
+                            };
+
+                        }
+
+                        $scope.$safeApply = function (fn) {
+                            var phase = this.$root.$$phase;
+                            if (phase === '$apply' || phase === '$digest') {
+                                if (fn && (typeof(fn) === 'function')) {
+                                    fn();
+                                }
+                            } else {
+                                this.$apply(fn);
+                            }
+                        };
+
+                    }],
+                compile:    function compile(tElement, tAttrs) {
+
+                    var $_Template = '',
+                        _element = tElement.html().trim();
+                    if (_element.length > 0) {
+                        $_Template = _element;
+                        tElement.html('');
+                    }
+
+                    return function fnPost(scope, element, attrs) {
+                        var getExpandOn = function () {
+                                if (scope.treeData && scope.treeData.length) {
+                                    var _firstNode = scope.treeData[0], _keys = Object.keys(_firstNode),
+                                        _regex = new RegExp("^__([a-zA-Z0-9_\-]*)__$"),
+                                        _len,
+                                        i;
+                                    // Auto get first field with type is string;
+                                    for (i = 0, _len = _keys.length; i < _len; i++) {
+                                        if (typeof (_firstNode[_keys[i]]) === 'string' && !_regex.test(_keys[i])) {
+                                            scope.expandingProperty = _keys[i];
+                                            return;
+                                        }
+                                    }
+
+                                    // Auto get first
+                                    if (angular.isUndefinedOrNull(scope.expandingProperty)) {
+                                        scope.expandingProperty = _keys[0];
+                                    }
+
+                                }
+                            },
+                            getColDefs = function () {
+                                // Auto get Defs except attribute __level__ ....
+                                if (scope.treeData.length) {
+                                    var _col_defs = [], _firstNode = scope.treeData[0],
+                                        _regex = new RegExp("(^__([a-zA-Z0-9_\-]*)__$|^" + scope.expandingProperty + "$)"),
+                                        _keys = Object.keys(_firstNode),
+                                        i, _len;
+                                    // Auto get first field with type is string;
+                                    for (i = 0, _len = _keys.length; i < _len; i++) {
+                                        if (typeof (_firstNode[_keys[i]]) === 'string' && !_regex.test(_keys[i])) {
+                                            _col_defs.push(
+                                                {
+                                                    field: _keys[i]
+                                                }
+                                            );
+                                        }
+                                    }
+                                    scope.colDefinitions = _col_defs;
+                                }
+                            },
+                            _fnInitFilter,
+                            _fnInitOrderBy,
+                            _fnGetControl,
+                            _fnInitDrag,
+                            do_f = function (root, node, parent, parent_real, level, visible, index) {
+                                var _i, _len, _icon, _index_real, _dept, _hashKey;
+                                if (!angular.isArray(node.__children__)) {
+                                    node.__children__ = [];
+                                }
+
+                                node.__parent_real__ = parent_real;
+                                node.__parent__ = parent;
+                                _len = node.__children__.length;
+
+                                if (angular.isUndefinedOrNull(node.__expanded__) && _len > 0) {
+                                    node.__expanded__ = level < scope.expandLevel;
+                                }
+
+                                if (_len === 0) {
+                                    _icon = -1;
+                                } else {
+                                    if (node.__expanded__) {
+                                        _icon = 1;
+                                    } else {
+                                        _icon = 0;
+                                    }
+                                }
+                                // Insert item vertically
+                                _index_real = root.length;
+                                node.__index__ = index;
+                                node.__index_real__ = _index_real;
+                                node.__level__ = level;
+                                node.__icon__ = _icon;
+                                node.__visible__ = !!visible;
+
+                                if (angular.isUndefinedOrNull(node.__uid__)) {
+                                    node.__uid__ = "" + Math.random();
+                                }
+
+                                root.push(node);
+
+                                // Check node children
+                                _dept = 1;
+                                if (_len > 0) {
+                                    for (_i = 0; _i < _len; _i++) {
+                                        _dept += do_f(
+                                            root,
+                                            node.__children__[_i],
+                                            (scope.primary_key === '__uid__') ? node.__uid__ : node[scope.primary_key],
+                                            _index_real,
+                                            level + 1,
+                                            visible && node.__expanded__,
+                                            _i
+                                        );
+                                    }
+                                }
+
+                                _hashKey = scope.getHash(node);
+
+                                if (angular.isUndefinedOrNull(node.__hashKey__) || node.__hashKey__ !== _hashKey) {
+                                    node.__hashKey__ = _hashKey;
+                                    // delete(scope.$globals[_hashKey]);
+                                }
+
+                                node.__dept__ = _dept;
+
+                                return _dept;
+                            },
+                            reload_data = function (oData) {
+                                var _data,
+                                    _len,
+                                    _tree_nodes = [];
+                                console.log('---------');
+                                if (angular.isDefined(oData)) {
+                                    if (!angular.isArray(oData) || oData.length === 0) {
+                                        return [];
+                                    } else {
+                                        _data = oData;
+                                    }
+                                } else if (!angular.isArray(scope.treeData) || scope.treeData.length === 0) {
+                                    return [];
+                                } else {
+                                    _data = scope.treeData;
+                                }
+
+                                if (!attrs.expandOn) {
+                                    getExpandOn();
+                                }
+
+                                if (!attrs.columnDefs) {
+                                    getColDefs();
+                                }
+
+                                if (angular.isDefined(scope.orderBy)) {
+                                    if (!angular.isFunction(_fnInitOrderBy)) {
+                                        _fnInitOrderBy = $TreeDnDPlugin('$TreeDnDOrderBy');
+                                    }
+
+                                    if (angular.isFunction(_fnInitOrderBy)) {
+                                        _data = _fnInitOrderBy(_data, scope.orderBy);
+                                    }
+                                }
+
+                                if (angular.isDefined(scope.filter)) {
+                                    if (!angular.isFunction(_fnInitFilter)) {
+                                        _fnInitFilter = $TreeDnDPlugin('$TreeDnDFilter');
+                                    }
+
+                                    if (angular.isFunction(_fnInitFilter)) {
+                                        _data = _fnInitFilter(_data, scope.filter, scope.filterOptions);
+                                    }
+                                }
+
+                                _len = _data.length;
+                                if (_len > 0) {
+                                    var _i,
+                                        _offset, _max, _min, _keys,
+                                        _deptTotal = 0;
+
+                                    for (_i = 0; _i < _len; _i++) {
+                                        _deptTotal += do_f(_tree_nodes, _data[_i], null, null, 1, true, _i);
+                                    }
+
+                                    // clear Element Empty
+                                    _keys = Object.keys(scope.$globals);
+                                    _len = scope.$globals.length;
+                                    _offset = _len - _deptTotal;
+
+                                    if (_offset !== 0) {
+                                        _max = _len - _offset;
+                                        _min = _max - Math.abs(_offset);
+                                        for (_i = _min; _i < _max; _i++) {
+                                            delete(scope.$globals[_keys[_i]]);
+                                        }
+                                    }
+                                }
+
+                                // clear memory
+                                if (angular.isDefined(scope.tree_nodes)) {
+                                    delete(scope.tree_nodes);
+                                }
+
+                                scope.tree_nodes = _tree_nodes;
+                                return _tree_nodes;
+                            },
+                            _defaultFilterOption = {
+                                showParent: true,
+                                showChild:  false,
+                                beginAnd:   true
+                            },
+                            tree,
+                            check_exist_attr = function (attrs, existAttr, isAnd) {
+                                if (angular.isUndefinedOrNull(existAttr)) {
+                                    return false;
+                                }
+
+                                if (existAttr === '*' || !angular.isUndefined(attrs[existAttr])) {
+                                    return true;
+                                }
+
+                                if (angular.isArray(existAttr)) {
+                                    return for_each_attrs(attrs, existAttr, isAnd);
+                                }
+                            },
+                            for_each_attrs = function (attrs, exist, isAnd) {
+                                var i, len = exist.length, passed = false;
+
+                                if (len === 0) {
+                                    return null;
+                                }
+                                for (i = 0; i < len; i++) {
+                                    if (check_exist_attr(attrs, exist[i], !isAnd)) {
+                                        passed = true;
+                                        if (!isAnd) {
+                                            return true;
+                                        }
+                                    } else {
+                                        if (isAnd) {
+                                            return false;
+                                        }
+                                    }
+                                }
+
+                                return passed;
+                            },
+                            generateWatch = function (type, nameAttr, valDefault, nameScope, fnNotExist, fnAfter, fnBefore) {
+                                nameScope = nameScope || nameAttr;
+                                if (typeof type === 'string' || angular.isArray(type)) {
+                                    if (angular.isFunction(fnBefore) && fnBefore()) {
+                                        return;//jmp
+                                    }
+                                    if (typeof tAttrs[nameAttr] === 'string') {
+                                        scope.$watch(
+                                            tAttrs[nameAttr], function (val, old, scope) {
+                                                if ((typeof type === 'string' && typeof val === type) ||
+                                                    (angular.isArray(type) && type.indexOf(typeof val) > -1)
+                                                ) {
+                                                    scope[nameScope] = val;
+                                                } else {
+                                                    if (angular.isFunction(valDefault)) {
+                                                        scope[nameScope] = valDefault(val);
+                                                    } else {
+                                                        scope[nameScope] = valDefault;
+                                                    }
+                                                }
+
+                                                if (angular.isFunction(fnAfter)) {
+                                                    fnAfter(scope[nameScope], scope);
+                                                }
+                                            }, true
+                                        );
+                                    } else {
+
+                                        if (angular.isFunction(fnNotExist)) {
+                                            scope[nameScope] = fnNotExist();
+                                        } else if (!angular.isUndefined(fnNotExist)) {
+                                            scope[nameScope] = fnNotExist;
+                                        }
+                                    }
+                                }
+                            },
+                            _watches = [
+                                [
+                                    'enableDrag', [
+                                    ['boolean', 'enableStatus', null, 'enabledStatus'],
+                                    ['boolean', 'enableMove', null, 'enabledMove'],
+                                    ['number', 'dragDelay', 0, null, 0],
+                                    ['boolean', 'enableCollapse', null, 'enabledCollapse'],
+                                    [
+                                        'boolean', 'enableHotkey', null, 'enabledHotkey', null, function (isHotkey) {
+                                        if (isHotkey) {
+                                            scope.enabledMove = false;
+                                        } else {
+                                            scope.enabledMove = scope.statusMove;
+                                        }
+                                    }]
+                                ]],
+                                [
+                                    ['enableDrag', 'enableStatus'], [
+                                    [
+                                        'string', 'templateCopy', attrs.templateCopy, 'templateCopy', null,
+                                        function (_url) {
+                                            if (_url && $templateCache.get(_url)) {
+                                                $TreeDnDTemplate.setCopy(_url, scope);
+                                            }
+                                        }],
+                                    [
+                                        'string', 'templateMove', attrs.templateMove, 'templateMove', null,
+                                        function (_url) {
+                                            if (_url && $templateCache.get(_url)) {
+                                                $TreeDnDTemplate.setMove(_url, scope);
+                                            }
+                                        }]
+                                ]],
+                                [
+                                    [['enableDrag', 'enableDrop']], [
+                                    ['number', 'dragBorder', 30, 'dragBorder', 30]]
+                                ],
+                                [
+                                    '*', [
+                                    ['boolean', 'horizontal'],
+                                    [
+                                        'callback', 'treeClass', function (val) {
+                                        switch (typeof val) {
+                                            case 'string':
+                                                scope.$tree_class = val;
+                                                break;
+                                            case 'object':
+                                                angular.extend(scope.$class, val);
+                                                scope.$tree_class = scope.$class.tree;
+                                                break;
+                                            default:
+                                                scope.$tree_class = attrs.treeClass;
+                                                break;
+                                        }
+                                    }, 'treeClass', function () {
+                                        scope.$tree_class = scope.$class.tree + ' table';
+                                    }, null, function () {
+                                        if (/^(\s+[\w\-]+){2,}$/g.test(" " + attrs.treeClass)) {
+                                            scope.$tree_class = attrs.treeClass.trim();
+                                            return true;
+                                        }
+                                    }],
+                                    [
+                                        ['object', 'string'], 'expandOn', getExpandOn, 'expandingProperty', getExpandOn,
+                                        function (expandOn) {
+                                            if (angular.isUndefinedOrNull(expandOn)) {
+                                                scope.expandingProperty = attrs.expandOn;
+                                            }
+                                        }],
+                                    [
+                                        'object', 'treeControl', angular.isDefined(scope.tree) ? scope.tree : {},
+                                        'tree', null, function ($tree) {
+
+                                        if (!angular.isFunction(_fnGetControl)) {
+                                            _fnGetControl = $TreeDnDPlugin('$TreeDnDControl');
+                                        }
+
+                                        if (angular.isFunction(_fnGetControl)) {
+                                            tree = angular.extend(
+                                                $tree,
+                                                _fnGetControl(scope)
+                                            );
+                                        }
+                                    }],
+                                    [
+                                        ['array', 'object'], 'columnDefs', getColDefs, 'colDefinitions', getColDefs,
+                                        function (colDefs) {
+                                            if (angular.isUndefinedOrNull(colDefs) || !angular.isArray(colDefs)) {
+                                                scope.colDefinitions = getColDefs();
+                                            }
+                                        }],
+                                    [['object', 'string', 'array', 'function'], 'orderBy', attrs.orderBy],
+                                    [
+                                        ['object', 'array'], 'filter', null, 'filter', null, function (filters) {
+                                        var _passed = false;
+                                        if (angular.isDefined(filters) && !angular.isArray(filters)) {
+                                            var _keysF = Object.keys(filters),
+                                                _lenF = _keysF.length, _iF;
+
+                                            if (_lenF > 0) {
+                                                for (_iF = 0; _iF < _lenF; _iF++) {
+
+                                                    if ((typeof filters[_keysF[_iF]]) === 'string' &&
+                                                        filters[_keysF[_iF]].length === 0) {
+                                                        continue;
+                                                    }
+                                                    _passed = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        scope.enabledFilter = _passed;
+                                        reload_data();
+                                    }],
+                                    [
+                                        'object', 'filterOptions', _defaultFilterOption, 'filterOptions',
+                                        _defaultFilterOption, function (option) {
+                                        if (typeof option === "object") {
+                                            scope.filterOptions = angular.extend(_defaultFilterOption, option);
+                                        }
+                                    }],
+                                    ['string', 'primaryKey', attrs.primaryKey, 'primary_key', '__uid__'],
+                                    ['string', 'indentUnit', attrs.indentUnit, 'indent_unit'],
+                                    ['number', 'indent', 30, null, 30],
+                                    ['number', 'indentPlus', 20, null, 20],
+                                    [
+                                        'null', 'callbacks',
+                                        function (optCallbacks) {
+                                            angular.forEach(
+                                                optCallbacks, function (value, key) {
+                                                    if (typeof value === "function") {
+                                                        if (scope.$callbacks[key]) {
+                                                            scope.$callbacks[key] = value;
+                                                        }
+                                                    }
+                                                }
+                                            );
+                                            return scope.$callbacks;
+                                        },
+                                        '$callbacks'
+                                    ],
+                                    [
+                                        'number', 'expandLevel', 3, 'expandLevel', 3, function () {
+                                        reload_data();
+                                    }],
+                                    ['boolean', 'enableDrag', null, 'dragEnabled'],
+                                    ['boolean', 'enableDrop', null, 'dropEnabled']
+                                ]]
+                            ],
+                            w, lenW = _watches.length,
+                            i, len,
+                            _curW,
+                            _typeW, _nameW, _defaultW, _scopeW, _NotW, _AfterW, _BeforeW;
+                        for (w = 0; w < lenW; w++) {
+                            // skip if not exist
+                            if (!check_exist_attr(attrs, _watches[w][0], true)) {
+                                continue;
+                            }
+                            _curW = _watches[w][1];
+                            for (i = 0, len = _curW.length; i < len; i++) {
+                                _typeW = _curW[i][0];
+                                _nameW = _curW[i][1];
+                                _defaultW = _curW[i][2];
+                                _scopeW = _curW[i][3];
+                                _NotW = _curW[i][4];
+                                _AfterW = _curW[i][5];
+                                _BeforeW = _curW[i][6];
+                                generateWatch(_typeW, _nameW, _defaultW, _scopeW, _NotW, _AfterW, _BeforeW);
+                            }
+                        }
+
+                        if (attrs.treeData) {
+                            scope.$watch(
+                                attrs.treeData, function (val) {
+                                    scope.treeData = val;
+                                }, true
+                            );
+                        }
+
+                        scope.$watch(
+                            'treeData', function (val) {
+                                reload_data(val);
+                            }, true
+                        );
+
+                        scope.reload_data = reload_data;
+
+                        if (attrs.enableDrag) {
+                            _fnInitDrag = $TreeDnDPlugin('$TreeDnDDrag');
+                            if (angular.isFunction(_fnInitDrag)) {
+                                _fnInitDrag(scope, element, $window, $document);
+                            }
+                        }
+
+                        // apply Template
+                        scope.$safeApply(
+                            function () {
+                                if ($_Template.length > 0) {
+                                    element.append($compile($_Template)(scope));
+                                } else {
+                                    $http.get(
+                                        attrs.templateUrl || $TreeDnDTemplate.getPath(),
+                                        {cache: $templateCache}
+                                    ).success(
+                                        function (data) {
+                                            element.append($compile(data.trim())(scope));
+                                        }
+                                    );
+                                }
+                            }
+                        );
+
+
+                        scope.$on(
+                            '$destroy', function () {
+
+                                console.log('##################');
+                            }
+                        );
+                    };
+                }
+            };
+        }]
+).factory(
+    '$TreeDnDDrag', [
+        '$timeout', '$TreeDnDHelper',
+        function ($timeout, $TreeDnDHelper) {
+            var _offset,
+                _fnPlaceHolder = function (e, $params) {
+                    if ($params.placeElm) {
+                        _offset = $TreeDnDHelper.offset($params.placeElm);
+                        if (_offset.top <= e.pageY && e.pageY <= _offset.top + _offset.height &&
+                            _offset.left <= e.pageX && e.pageX <= _offset.left + _offset.width
+                        ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                _fnDragStart = function (e, $params) {
+                    if (!$params.hasTouch && (e.button === 2 || e.which === 3)) {
+                        // disable right click
+                        return;
+                    }
+                    if (e.uiTreeDragging || (e.originalEvent && e.originalEvent.uiTreeDragging)) { // event has already fired in other scope.
+                        return;
+                    }
+                    // the element which is clicked.
+                    var eventElm = angular.element(e.target),
+                        eventScope = eventElm.scope();
+                    if (!eventScope || !eventScope.$type) {
+                        return;
+                    }
+                    // if (eventScope.$type !== 'TreeDnDNode') { // Check if it is a node or a handle
+                    //     return;
+                    // }
+
+                    if (eventScope.$type !== 'TreeDnDNodeHandle') { // If the node has a handle, then it should be clicked by the handle
+                        return;
+                    }
+
+                    var eventElmTagName = eventElm.prop('tagName').toLowerCase(),
+                        dragScope,
+                        _$scope = $params.$scope;
+                    if (eventElmTagName === 'input'
+                        || eventElmTagName === 'textarea'
+                        || eventElmTagName === 'button'
+                        || eventElmTagName === 'select') { // if it's a input or button, ignore it
+                        return;
+                    }
+                    // check if it or it's parents has a 'data-nodrag' attribute
+                    while (eventElm && eventElm[0] && eventElm[0] !== $params.element) {
+                        if ($TreeDnDHelper.nodrag(eventElm)) { // if the node mark as `nodrag`, DONOT drag it.
+                            return;
+                        }
+                        eventElm = eventElm.parent();
+                    }
+
+                    e.uiTreeDragging = true; // stop event bubbling
+                    if (e.originalEvent) {
+                        e.originalEvent.uiTreeDragging = true;
+                    }
+                    e.preventDefault();
+
+                    dragScope = eventScope.getScopeNode();
+
+                    $params.firstMoving = true;
+
+                    if (!_$scope.$callbacks.beforeDrag(dragScope)) {
+                        return;
+                    }
+
+                    var eventObj = $TreeDnDHelper.eventObj(e),
+                        tagName = dragScope.$element.prop('tagName').toLowerCase(),
+                        isTable = (tagName === 'tr');
+
+                    $params.dragInfo = $TreeDnDHelper.dragInfo(dragScope);
+
+                    _$scope.setDragging($params.dragInfo);
+
+                    $params.pos = $TreeDnDHelper.positionStarted(eventObj, dragScope.$element);
+
+                    if (isTable) {
+                        $params.dragElm = angular.element($params.$window.document.createElement('table'))
+                            .addClass(_$scope.$class.tree)
+                            .addClass(_$scope.$class.drag)
+                            .addClass(_$scope.$tree_class);
+                    } else {
+                        $params.dragElm = angular.element($params.$window.document.createElement('ul'))
+                            .addClass(_$scope.$class.drag)
+                            .addClass('tree-dnd-nodes')
+                            .addClass(_$scope.$tree_class);
+                    }
+
+                    $params.dragElm.css(
+                        {
+                            'width':   $TreeDnDHelper.width(dragScope.$element) + 'px',
+                            'z-index': 9995
+                        }
+                    );
+
+                    $params.offsetEdge = 0;
+                    var _width = $TreeDnDHelper.width(dragScope.$element),
+                        _scope = dragScope,
+                        _element = _scope.$element,
+                        _clone = null,
+                        _needCollapse = !!_$scope.enabledCollapse,
+                        _copied = false,
+                        _tbody = null;
+
+                    if (isTable) {
+                        $params.offsetEdge = $params.dragInfo.node.__level__ - 1;
+                        _tbody = angular.element($params.$window.document.createElement('tbody'));
+
+                        _$scope.for_all_descendants(
+                            $params.dragInfo.node, function (_node) {
+                                _scope = _$scope.getScope(_node);
+                                _element = _scope.$element;
+
+                                if (!_copied) {
+                                    _clone = _element.clone();
+
+                                    $TreeDnDHelper.replaceIndent(
+                                        _scope,
+                                        _clone,
+                                        _node.__level__ - $params.offsetEdge,
+                                        'padding-left'
+                                    );
+
+                                    _tbody.append(_clone);
+
+                                    // skip all, just clone parent
+                                    if (_needCollapse) {
+                                        _copied = true;
+                                    }
+                                }
+
+                                if (_$scope.enabledMove && _$scope.$class.hidden) {
+                                    _element.addClass(_$scope.$class.hidden);
+                                }
+                            }
+                        );
+
+                        $params.dragElm.append(_tbody);
+                    } else {
+
+                        if (!_needCollapse) {
+                            _clone = _element.clone();
+                        } else {
+                            var _holder = _scope.getElementChilds(),
+                                _swaper = angular.element("<swaped />");
+
+                            // Insert tag `<holder>` & move _holder into tag `<swaper>`;
+                            _holder.after(angular.element("<holder />"));
+                            _swaper.append(_holder);
+
+                            // Clone without Children & remove tag `<holder>`
+                            _clone = _element.clone();
+                            _clone.find("holder").remove();
+
+                            // bring childs back frome `swaper` & remove tag `<swaper>`
+                            _element.find("holder").replaceWith(_holder);
+
+                            // Reset & clear all;
+                            _swaper.remove();
+                            _holder = null;
+                        }
+
+                        $params.dragElm.append(_clone);
+                        if (_$scope.enabledMove && _$scope.$class.hidden) {
+                            _element.addClass(_$scope.$class.hidden);
+                        }
+                    }
+
+                    $params.dragElm.css(
+                        {
+                            'left': eventObj.pageX - $params.pos.offsetX + _$scope.$callbacks.calsIndent(
+                                $params.offsetEdge + 1,
+                                true,
+                                true
+                            )       + 'px',
+                            'top':  eventObj.pageY - $params.pos.offsetY + 'px'
+                        }
+                    );
+                    // moving item with descendant
+                    $params.$document.find('body').append($params.dragElm);
+                    if (_$scope.$callbacks.droppable()) {
+                        $params.placeElm = _$scope.initPlace(dragScope.$element, $params.dragElm);
+
+                        if (isTable) {
+                            $TreeDnDHelper.replaceIndent(_$scope, $params.placeElm, $params.dragInfo.node.__level__);
+                        }
+
+                        $params.placeElm.css('width', _width);
+                    }
+
+                    _$scope.showPlace();
+                    _$scope.targeting = true;
+
+                    if (_$scope.enabledStatus) {
+                        _$scope.refreshStatus();
+                        _$scope.setPositionStatus(e);
+                    }
+
+                    angular.element($params.$document).bind('touchend', $params.dragEndEvent);
+                    angular.element($params.$document).bind('touchcancel', $params.dragEndEvent);
+                    angular.element($params.$document).bind('touchmove', $params.dragMoveEvent);
+                    angular.element($params.$document).bind('mouseup', $params.dragEndEvent);
+                    angular.element($params.$document).bind('mousemove', $params.dragMoveEvent);
+                    angular.element($params.$document).bind('mouseleave', $params.dragCancelEvent);
+
+                    $params.document_height = Math.max(
+                        $params.body.scrollHeight,
+                        $params.body.offsetHeight,
+                        $params.html.clientHeight,
+                        $params.html.scrollHeight,
+                        $params.html.offsetHeight
+                    );
+
+                    $params.document_width = Math.max(
+                        $params.body.scrollWidth,
+                        $params.body.offsetWidth,
+                        $params.html.clientWidth,
+                        $params.html.scrollWidth,
+                        $params.html.offsetWidth
+                    );
+                },
+                _fnDragMove = function (e, $params) {
+                    var _$scope = $params.$scope;
+                    if (!$params.dragStarted) {
+                        if (!$params.dragDelaying) {
+                            $params.dragStarted = true;
+                            _$scope.$safeApply(
+                                function () {
+                                    _$scope.$callbacks.dragStart($params.dragInfo);
+                                }
+                            );
+                        }
+                        return;
+                    }
+
+                    if ($params.dragElm) {
+                        e.preventDefault();
+                        if ($params.$window.getSelection) {
+                            $params.$window.getSelection().removeAllRanges();
+                        } else if ($params.$window.document.selection) {
+                            $params.$window.document.selection.empty();
+                        }
+
+                        var eventObj = $TreeDnDHelper.eventObj(e),
+                            leftElmPos = eventObj.pageX - $params.pos.offsetX,
+                            topElmPos = eventObj.pageY - $params.pos.offsetY;
+
+                        //dragElm can't leave the screen on the left
+                        if (leftElmPos < 0) {
+                            leftElmPos = 0;
+                        }
+
+                        //dragElm can't leave the screen on the top
+                        if (topElmPos < 0) {
+                            topElmPos = 0;
+                        }
+
+                        //dragElm can't leave the screen on the bottom
+                        if ((topElmPos + 10) > $params.document_height) {
+                            topElmPos = $params.document_height - 10;
+                        }
+
+                        //dragElm can't leave the screen on the right
+                        if ((leftElmPos + 10) > $params.document_width) {
+                            leftElmPos = $params.document_width - 10;
+                        }
+
+                        $params.dragElm.css(
+                            {
+                                'left': leftElmPos + _$scope.$callbacks.calsIndent(
+                                    $params.offsetEdge + 1,
+                                    true,
+                                    true
+                                )       + 'px',
+                                'top':  topElmPos + 'px'
+                            }
+                        );
+
+                        if (_$scope.enabledStatus) {
+                            _$scope.setPositionStatus(e);
+                        }
+
+                        var top_scroll = window.pageYOffset || $params.$window.document.documentElement.scrollTop,
+                            bottom_scroll = top_scroll + (window.innerHeight || $params.$window.document.clientHeight || $params.$window.document.clientHeight);
+                        // to scroll down if cursor y-position is greater than the bottom position the vertical scroll
+                        if (bottom_scroll < eventObj.pageY && bottom_scroll <= $params.document_height) {
+                            window.scrollBy(0, 10);
+                        }
+                        // to scroll top if cursor y-position is less than the top position the vertical scroll
+                        if (top_scroll > eventObj.pageY) {
+                            window.scrollBy(0, -10);
+                        }
+
+                        $TreeDnDHelper.positionMoved(e, $params.pos, $params.firstMoving);
+
+                        if ($params.firstMoving) {
+                            $params.firstMoving = false;
+                            return;
+                        }
+                        // check if add it as a child node first
+
+                        var targetX = eventObj.pageX - $params.$window.document.body.scrollLeft,
+                            targetY = eventObj.pageY - (window.pageYOffset || $params.$window.document.documentElement.scrollTop),
+
+                            targetElm,
+                            targetScope,
+                            targetBefore,
+                            targetOffset,
+                            tagName,
+                            isTable,
+                            isChanged = true,
+                            isVeritcal = true,
+                            isEmpty,
+                            isSwapped,
+                            _scope,
+                            _target,
+                            _parent,
+                            _info = $params.dragInfo,
+                            _move = _info.move,
+                            _drag = _info.node,
+                            _drop = _info.drop,
+                            treeScope = _info.target,
+                            fnSwapTree,
+                            isHolder = _fnPlaceHolder(e, $params);
+
+                        if (!isHolder) {
+                            /* when using elementFromPoint() inside an iframe, you have to call
+                             elementFromPoint() twice to make sure IE8 returns the correct value
+                             $params.$window.document.elementFromPoint(targetX, targetY);*/
+
+                            targetElm = angular.element(
+                                $params.$window.document.elementFromPoint(
+                                    targetX,
+                                    targetY
+                                )
+                            );
+
+                            targetScope = targetElm.scope();
+                            if (!targetScope) {
+                                return;
+                            }
+
+                            fnSwapTree = function () {
+                                treeScope = targetScope.getScopeTree();
+                                _target = _info.target;
+                                if (_info.target !== treeScope) {
+                                    if (treeScope.$callbacks.droppable()) {
+                                        // Replace by place-holder new
+                                        _target.hidePlace();
+                                        _target.targeting = false;
+                                        treeScope.targeting = true;
+
+                                        _info.target = treeScope;
+                                        $params.placeElm = treeScope.initPlace(targetScope.$element, $params.dragElm);
+
+                                        _target = null;
+                                        isSwapped = true;
+                                    } else {
+                                        // Not allowed Drop Item
+                                        return false;
+                                    }
+                                }
+                                return true;
+                            };
+
+                            if (angular.isFunction(targetScope.getScopeNode)) {
+                                targetScope = targetScope.getScopeNode();
+                                if (!fnSwapTree()) {
+                                    return;
+                                }
+                            } else {
+                                if (targetScope.$type === 'TreeDnDNodes' || targetScope.$type === 'TreeDnD') {
+                                    if (targetScope.tree_nodes) {
+                                        if (targetScope.tree_nodes.length === 0) {
+                                            if (!fnSwapTree()) {
+                                                return;
+                                            }
+                                            // Empty
+                                            isEmpty = true;
+                                        }
+                                    } else {
+                                        return;
+                                    }
+                                } else {
+                                    return;
+                                }
+                            }
+                        }
+
+                        if ($params.pos.dirAx && !isSwapped || isHolder) {
+                            isVeritcal = false;
+                            targetScope = _info.scope;
+                        }
+
+                        if (!targetScope.$element && !targetScope) {
+                            return;
+                        }
+
+                        tagName = targetScope.$element.prop('tagName').toLowerCase();
+                        isTable = (tagName === 'tbody' || tagName === 'table' || tagName === 'tr' || tagName === 'td');
+                        if (isEmpty) {
+                            _move.parent = null;
+                            _move.pos = 0;
+
+                            _drop = null;
+                        } else {
+                            // move vertical
+                            if (isVeritcal) {
+                                targetElm = targetScope.$element; // Get the element of tree-dnd-node
+
+                                targetOffset = $TreeDnDHelper.offset(targetElm);
+
+                                if (targetScope.horizontal && !isTable) {
+                                    targetBefore = eventObj.pageX < (targetOffset.left + $TreeDnDHelper.width(targetElm) / 2);
+                                } else {
+                                    if (isTable) {
+                                        targetBefore = eventObj.pageY < (targetOffset.top + $TreeDnDHelper.height(targetElm) / 2);
+                                    } else {
+                                        var _height = $TreeDnDHelper.height(targetElm);
+
+                                        if (targetScope.getElementChilds()) {
+                                            _height -= -$TreeDnDHelper.height(targetScope.getElementChilds());
+                                        }
+
+                                        if (eventObj.pageY > targetOffset.top + _height) {
+                                            return;
+                                        }
+
+                                        targetBefore = eventObj.pageY < (targetOffset.top + _height / 2);
+                                    }
+                                }
+
+                                if (!angular.isFunction(targetScope.getData)) {
+                                    return;
+                                }
+
+                                _target = targetScope.getData();
+                                _parent = targetScope.getNode(_target.__parent_real__);
+
+                                if (targetBefore) {
+                                    var _prev = targetScope.getPrevSibling(_target);
+
+                                    _move.parent = _parent;
+                                    _move.pos = angular.isDefined(_prev) ? _prev.__index__ + 1 : 0;
+
+                                    _drop = _prev;
+                                } else {
+                                    if (_target.__expanded__ && !(_target.__children__.length === 1 && _target.__index_real__ === _drag.__parent_real__)) {
+                                        _move.parent = _target;
+                                        _move.pos = 0;
+
+                                        _drop = null;
+                                    } else {
+                                        _move.parent = _parent;
+                                        _move.pos = _target.__index__ + 1;
+
+                                        _drop = _target;
+                                    }
+                                }
+                            } else {
+                                // move horizontal
+                                if ($params.pos.dirAx && $params.pos.distAxX >= treeScope.dragBorder) {
+                                    $params.pos.distAxX = 0;
+                                    // increase horizontal level if previous sibling exists and is not collapsed
+                                    if ($params.pos.distX > 0) {
+                                        _parent = _drop;
+                                        if (!_parent) {
+                                            if (_move.pos - 1 >= 0) {
+                                                _parent = _move.parent.__children__[_move.pos - 1];
+                                            } else {
+                                                return;
+                                            }
+                                        }
+
+                                        if (_info.drag === _info.target && _parent === _drag && _$scope.enabledMove) {
+                                            _parent = treeScope.getPrevSibling(_parent);
+                                        }
+
+                                        if (_parent && _parent.__visible__) {
+                                            var _len = _parent.__children__.length;
+
+                                            _move.parent = _parent;
+                                            _move.pos = _len;
+
+                                            if (_len > 0) {
+                                                _drop = _parent.__children__[_len - 1];
+                                            } else {
+                                                _drop = null;
+                                            }
+                                        } else {
+                                            // Not changed
+                                            return;
+                                        }
+                                    } else if ($params.pos.distX < 0) {
+                                        _target = _move.parent;
+                                        if (_target &&
+                                            (_target.__children__.length === 0 ||
+                                             _target.__children__.length - 1 < _move.pos ||
+                                             (_info.drag === _info.target &&
+                                              _target.__index_real__ === _drag.__parent_real__ &&
+                                              _target.__children__.length - 1 === _drag.__index__ && _$scope.enabledMove))
+                                        ) {
+                                            _parent = treeScope.getNode(_target.__parent_real__);
+
+                                            _move.parent = _parent;
+                                            _move.pos = _target.__index__ + 1;
+
+                                            _drop = _target;
+                                        } else {
+                                            // Not changed
+                                            return;
+                                        }
+                                    } else {
+                                        return;
+                                    }
+                                } else {
+                                    // limited
+                                    return;
+                                }
+                            }
+                        }
+
+                        if (_info.drag === _info.target &&
+                            _move.parent &&
+                            _drag.__parent_real__ === _move.parent.__index_real__ &&
+                            _drag.__index__ === _move.pos
+                        ) {
+                            isChanged = false;
+                        }
+
+                        if (treeScope.$callbacks.accept(_info, _move, isChanged)) {
+                            _info.move = _move;
+                            _info.drop = _drop;
+                            _info.changed = isChanged;
+                            _info.scope = targetScope;
+
+                            if (isTable) {
+                                $TreeDnDHelper.replaceIndent(
+                                    treeScope,
+                                    $params.placeElm,
+                                    angular.isUndefinedOrNull(_move.parent) ? 1 : _move.parent.__level__ + 1
+                                );
+
+                                if (_drop) {
+                                    _parent = (_move.parent ? _move.parent.__children__ : null ) || _info.target.treeData;
+
+                                    if (_drop.__index__ < _parent.length - 1) {
+                                        // Find fast
+                                        _drop = _parent[_drop.__index__ + 1];
+                                        _scope = _info.target.getScope(_drop);
+                                        _scope.$element[0].parentNode.insertBefore(
+                                            $params.placeElm[0],
+                                            _scope.$element[0]
+                                        );
+                                    } else {
+                                        _target = _info.target.getLastDescendant(_drop);
+                                        _scope = _info.target.getScope(_target);
+                                        _scope.$element.after($params.placeElm);
+                                    }
+                                } else {
+                                    _scope = _info.target.getScope(_move.parent);
+                                    if (_scope) {
+                                        if (_move.parent) {
+                                            _scope.$element.after($params.placeElm);
+
+                                        } else {
+                                            _scope.getElementChilds().prepend($params.placeElm);
+                                        }
+                                    }
+                                }
+                            } else {
+                                _scope = _info.target.getScope(_drop || _move.parent);
+
+                                if (_drop) {
+                                    _scope.$element.after($params.placeElm);
+                                } else {
+                                    _scope.getElementChilds().prepend($params.placeElm);
+                                }
+                            }
+
+                            treeScope.showPlace();
+
+                            _$scope.$safeApply(
+                                function () {
+                                    _$scope.$callbacks.dragMove(_info);
+                                }
+                            );
+                        }
+
+                    }
+                },
+                _fnDragEnd = function (e, $params) {
+                    e.preventDefault();
+                    if ($params.dragElm) {
+                        var _passed = false,
+                            _$scope = $params.$scope,
+                            _scope = _$scope.getScope($params.dragInfo.node),
+                            tagName = _scope.$element.prop('tagName').toLowerCase(),
+                            _isTable = (tagName === 'tr'),
+                            _element = _scope.$element;
+
+                        _$scope.$safeApply(
+                            function () {
+                                _passed = _$scope.$callbacks.beforeDrop($params.dragInfo);
+                            }
+                        );
+
+                        // rollback all
+                        if (_isTable) {
+                            _$scope.for_all_descendants(
+                                $params.dragInfo.node, function (_node) {
+                                    _scope = _$scope.getScope(_node);
+                                    _element = _scope.$element;
+
+                                    if (_scope.$class.hidden) {
+                                        _element.removeClass(_$scope.$class.hidden);
+                                    }
+                                }
+                            );
+                        } else {
+                            if (_$scope.$class.hidden) {
+                                _element.removeClass(_$scope.$class.hidden);
+                            }
+                        }
+
+                        $params.dragElm.remove();
+                        $params.dragElm = null;
+
+                        if (_$scope.enabledStatus) {
+                            _$scope.hideStatus();
+                        }
+
+                        var _status = false;
+                        if (_$scope.$$apply) {
+                            _$scope.$safeApply(
+                                function () {
+                                    _status = _$scope.$callbacks.dropped(
+                                        $params.dragInfo,
+                                        _passed,
+                                        _$scope.enabledMove
+                                    );
+                                }
+                            );
+                        } else {
+                            _fnBindDrag($params);
+                        }
+
+                        _$scope.$safeApply(
+                            function () {
+                                _$scope.$callbacks.dragStop($params.dragInfo, _status);
+                            }
+                        );
+
+                        $params.dragInfo.target.hidePlace();
+                        $params.dragInfo.target.targeting = false;
+
+                        $params.dragInfo = null;
+                        _$scope.$$apply = false;
+                        _$scope.setDragging(null);
+                    }
+
+                    angular.element($params.$document).unbind('touchend', $params.dragEndEvent); // Mobile
+                    angular.element($params.$document).unbind('touchcancel', $params.dragEndEvent); // Mobile
+                    angular.element($params.$document).unbind('touchmove', $params.dragMoveEvent); // Mobile
+                    angular.element($params.$document).unbind('mouseup', $params.dragEndEvent);
+                    angular.element($params.$document).unbind('mousemove', $params.dragMoveEvent);
+                    angular.element($params.$window.document.body).unbind('mouseleave', $params.dragCancelEvent);
+                },
+                _fnDragStartEvent = function (e, $params) {
+                    if ($params.$scope.$callbacks.draggable()) {
+                        _fnDragStart(e, $params);
+                    }
+                },
+                _fnBindDrag = function ($params) {
+                    $params.element.bind(
+                        'touchstart mousedown', function (e) {
+                            $params.dragDelaying = true;
+                            $params.dragStarted = false;
+                            _fnDragStartEvent(e, $params);
+                            $params.dragTimer = $timeout(
+                                function () {
+                                    $params.dragDelaying = false;
+                                }, $params.$scope.dragDelay
+                            );
+                        }
+                    );
+                    $params.element.bind(
+                        'touchend touchcancel mouseup', function () {
+                            $timeout.cancel($params.dragTimer);
+                        }
+                    );
+                },
+                _fnKeydownHandler = function (e, $params) {
+                    var _$scope = $params.$scope;
+                    if (e.keyCode === 27) {
+                        if (_$scope.enabledStatus) {
+                            _$scope.hideStatus();
+                        }
+
+                        _$scope.$$apply = false;
+                        _fnDragEnd(e, $params);
+                    } else {
+                        if (_$scope.enabledHotkey && e.shiftKey) {
+                            _$scope.enableMove(true);
+                            if (_$scope.enabledStatus) {
+                                _$scope.refreshStatus();
+                            }
+
+                            if (!$params.dragInfo) {
+                                return;
+                            }
+
+                            var _scope = _$scope.getScope($params.dragInfo.node),
+                                tagName = _scope.$element.prop('tagName').toLowerCase(),
+                                _element = _scope.$element;
+
+                            if (tagName === 'tr') {
+                                _$scope.for_all_descendants(
+                                    $params.dragInfo.node, function (_node) {
+                                        _scope = _$scope.getScope(_node);
+                                        _element = _scope.$element;
+
+                                        if (_$scope.$class.hidden) {
+                                            _element.addClass(_$scope.$class.hidden);
+                                        }
+                                    }
+                                );
+                            } else {
+                                if (_$scope.$class.hidden) {
+                                    _element.addClass(_$scope.$class.hidden);
+                                }
+                            }
+                        }
+                    }
+                },
+                _fnKeyupHandler = function (e, $params) {
+                    var _$scope = $params.$scope;
+                    if (_$scope.enabledHotkey && !e.shiftKey) {
+                        _$scope.enableMove(false);
+
+                        if (_$scope.enabledStatus) {
+                            _$scope.refreshStatus();
+                        }
+
+                        if (!$params.dragInfo) {
+                            return;
+                        }
+
+                        var _scope = _$scope.getScope($params.dragInfo.node),
+                            tagName = _scope.$element.prop('tagName').toLowerCase(),
+                            _element = _scope.$element;
+
+                        if (tagName === 'tr') {
+                            _$scope.for_all_descendants(
+                                $params.dragInfo.node, function (_node) {
+
+                                    _scope = _$scope.getScope(_node);
+                                    _element = _scope.$element;
+
+                                    if (_$scope.$class.hidden) {
+                                        _element.removeClass(_$scope.$class.hidden);
+                                    }
+                                }
+                            );
+                        } else {
+                            if (_$scope.$class.hidden) {
+                                _element.removeClass(_$scope.$class.hidden);
+                            }
+                        }
+                    }
+                },
+
+                _$init = function (scope, element, $window, $document) {
+                    var $params = {
+                            hasTouch:        ('ontouchstart' in window),
+                            firstMoving:     null,
+                            dragInfo:        null,
+                            pos:             null,
+                            placeElm:        null,
+                            dragElm:         null,
+                            dragDelaying:    true,
+                            dragStarted:     false,
+                            dragTimer:       null,
+                            body:            document.body,
+                            html:            document.documentElement,
+                            document_height: null,
+                            document_width:  null,
+                            offsetEdge:      null,
+                            $scope:          scope,
+                            $window:         $window,
+                            $document:       $document,
+                            element:         element,
+                            bindDrag:        function () {
+                                _fnBindDrag($params);
+                            },
+                            dragEnd:         function (e) {
+                                _fnDragEnd(e, $params);
+                            },
+                            dragMoveEvent:   function (e) {
+                                _fnDragMove(e, $params)
+                            },
+                            dragEndEvent:    function (e) {
+                                scope.$$apply = true;
+                                _fnDragEnd(e, $params);
+                            },
+                            dragCancelEvent: function (e) {
+                                _fnDragEnd(e, $params);
+                            }
+                        },
+                        keydownHandler = function (e) {
+                            return _fnKeydownHandler(e, $params);
+                        },
+                        keyupHandler = function (e) {
+                            return _fnKeyupHandler(e, $params);
+                        };
+
+                    scope.dragEnd = function (e) {
+                        $params.dragEnd(e);
+                    };
+
+                    $params.bindDrag();
+
+                    angular.element($window.document.body).bind("keydown", keydownHandler);
+                    angular.element($window.document.body).bind("keyup", keyupHandler);
+                    //unbind handler that retains scope
+                    scope.$on(
+                        '$destroy', function () {
+
+                            console.log('++++++++++++');
+                            angular.element($window.document.body).unbind("keydown", keydownHandler);
+                            angular.element($window.document.body).unbind("keyup", keyupHandler);
+                            if (scope.statusElm) {
+                                scope.statusElm.remove();
+                            }
+
+                            if (scope.placeElm) {
+                                scope.placeElm.remove();
+                            }
+                        }
+                    );
+                };
+
+            return _$init;
+        }
+    ]
+).factory(
+    '$TreeDnDControl', function () {
+        var _target, _parent,
+            i, len,
+            fnSetCollapse = function fnSetCollapse(node) {
+                node.__expanded__ = false;
+            },
+            fnSetExpand = function fnSetExpand(node) {
+                node.__expanded__ = true;
+            },
+
+            _$init = function _$init(scope) {
+                var n, tree = {
+                    selected_node:                     null,
+                    for_all_descendants:               scope.for_all_descendants,
+                    select_node:                       function (node) {
+                        if (!node) {
+                            if (tree.selected_node) {
+                                delete(tree.selected_node.__selected__);
+                            }
+                            tree.selected_node = null;
+                            return null;
+                        }
+
+                        if (node !== tree.selected_node) {
+                            if (tree.selected_node) {
+                                delete(tree.selected_node.__selected__);
+                            }
+                            node.__selected__ = true;
+                            tree.selected_node = node;
+                            tree.expand_all_parents(node);
+                            if (angular.isFunction(tree.on_select)) {
+                                tree.on_select(node);
+                            }
+                        }
+                        return node;
+                    },
+                    deselect_node:                     function () {
+                        _target = null;
+                        if (tree.selected_node) {
+                            delete(tree.selected_node.__selected__);
+                            _target = tree.selected_node;
+                            tree.selected_node = null;
+                        }
+                        return _target;
+                    },
+                    get_parent:                        function (node) {
+                        if (node && node.__parent_real__ !== null) {
+                            return scope.tree_nodes[node.__parent_real__];
+                        }
+                        return null;
+                    },
+                    for_all_ancestors:                 function (child, fn) {
+                        _parent = tree.get_parent(child);
+                        if (_parent) {
+                            if (fn(_parent)) {
+                                return false;
+                            }
+
+                            return tree.for_all_ancestors(_parent, fn);
+                        }
+                        return true;
+                    },
+                    expand_all_parents:                function (child) {
+                        return tree.for_all_ancestors(
+                            child, fnSetExpand
+                        );
+                    },
+                    reload_data:                       function () {
+                        return scope.reload_data();
+                    },
+                    add_node:                          function (parent, new_node, index) {
+                        if (typeof index !== 'number') {
+                            if (parent) {
+                                parent.__children__.push(new_node);
+                                parent.__expanded__ = true;
+                            } else {
+                                scope.treeData.push(new_node);
+                            }
+                        } else {
+                            if (parent) {
+                                parent.__children__.splice(index, 0, new_node);
+                                parent.__expanded__ = true;
+                            } else {
+                                scope.treeData.splice(index, 0, new_node);
+                            }
+                        }
+                        return new_node;
+                    },
+                    add_node_root:                     function (new_node) {
+                        tree.add_node(null, new_node);
+                        return new_node;
+                    },
+                    expand_all:                        function () {
+                        len = scope.treeData.length;
+                        for (i = 0; i < len; i++) {
+                            tree.for_all_descendants(
+                                scope.treeData[i], fnSetExpand
+                            );
+                        }
+                    },
+                    collapse_all:                      function () {
+                        len = scope.treeData.length;
+                        for (i = 0; i < len; i++) {
+                            tree.for_all_descendants(
+                                scope.treeData[i], fnSetCollapse
+                            );
+                        }
+                    },
+                    remove_node:                       function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            if (node.__parent_real__) {
+                                _parent = tree.get_parent(node).__children__;
+                            } else {
+                                _parent = scope.treeData;
+                            }
+
+                            _parent.splice(node.__index__, 1);
+
+                            if (tree.selected_node === node) {
+                                tree.selected_node = null;
+                            }
+                        }
+                    },
+                    expand_node:                       function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            node.__expanded__ = true;
+                            return node;
+                        }
+                    },
+                    collapse_node:                     function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            node.__expanded__ = false;
+                            return node;
+                        }
+                    },
+                    get_selected_node:                 function () {
+                        return tree.selected_node;
+                    },
+                    get_first_node:                    function () {
+                        len = scope.treeData.length;
+                        if (len > 0) {
+                            return scope.treeData[0];
+                        }
+                        return null;
+                    },
+                    get_children:                      function (node) {
+                        return node.__children__;
+                    },
+                    get_siblings:                      function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            _parent = tree.get_parent(node);
+                            if (_parent) {
+                                _target = _parent.__children__;
+                            } else {
+                                _target = scope.treeData;
+                            }
+                            return _target;
+                        }
+                    },
+                    get_next_sibling:                  function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            _target = tree.get_siblings(node);
+                            n = _target.length;
+                            if (node.__index__ < n) {
+                                return _target[node.__index__ + 1];
+                            }
+                        }
+                    },
+                    get_prev_sibling:                  function (node) {
+                        node = node || tree.selected_node;
+                        _target = tree.get_siblings(node);
+                        if (node.__index__ > 0) {
+                            return _target[node.__index__ - 1];
+                        }
+                    },
+                    get_first_child:                   function (node) {
+                        node = node || tree.selected_node;
+                        if (node) {
+                            _target = node.__children__;
+                            if (_target && _target.length > 0) {
+                                return node.__children__[0];
+                            }
+                        }
+                        return null;
+                    },
+                    get_closest_ancestor_next_sibling: function (node) {
+                        node = node || tree.selected_node;
+                        _target = tree.get_next_sibling(node);
+                        if (_target) {
+                            return _target;
+                        }
+
+                        _parent = tree.get_parent(node);
+                        return tree.get_closest_ancestor_next_sibling(_parent);
+                    },
+                    get_next_node:                     function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_first_child(node);
+                            if (_target) {
+                                return _target;
+                            } else {
+                                return tree.get_closest_ancestor_next_sibling(node);
+                            }
+                        }
+                    },
+                    get_prev_node:                     function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_prev_sibling(node);
+                            if (_target) {
+                                return tree.get_last_descendant(_target);
+                            }
+
+                            _parent = tree.get_parent(node);
+                            return _parent;
+                        }
+                    },
+                    get_last_descendant:               scope.getLastDescendant,
+                    select_parent_node:                function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _parent = tree.get_parent(node);
+                            if (_parent) {
+                                return tree.select_node(_parent);
+                            }
+                        }
+                    },
+                    select_first_node:                 function () {
+                        return tree.select_node(tree.get_first_node());
+                    },
+                    select_next_sibling:               function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_next_sibling(node);
+                            if (_target) {
+                                return tree.select_node(_target);
+                            }
+                        }
+                    },
+                    select_prev_sibling:               function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_prev_sibling(node);
+                            if (_target) {
+                                return tree.select_node(_target);
+                            }
+                        }
+                    },
+                    select_next_node:                  function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_next_node(node);
+                            if (_target) {
+                                return tree.select_node(_target);
+                            }
+                        }
+                    },
+                    select_prev_node:                  function (node) {
+                        node = node || tree.selected_node;
+
+                        if (node) {
+                            _target = tree.get_prev_node(node);
+                            if (_target) {
+                                return tree.select_node(_target);
+                            }
+                        }
+                    }
+                };
+                angular.extend(scope.tree, tree);
+                return scope.tree;
+            };
+
+        return _$init;
+    }
+).factory(
+    '$TreeDnDConvert', function () {
+        var _$initConvert = {
+            line2tree: function (data, primaryKey, parentKey) {
+                if (!data || data.length === 0 || !primaryKey || !parentKey) {
+                    return [];
+                }
+                var tree = [],
+                    rootIds = [],
+                    item = data[0],
+                    _primary = item[primaryKey],
+                    treeObjs = {},
+                    parentId, parent,
+                    len = data.length,
+                    i = 0;
+                while (i < len) {
+                    item = data[i++];
+                    _primary = item[primaryKey];
+                    treeObjs[_primary] = item;
+                    parentId = item[parentKey];
+                    if (parentId) {
+                        parent = treeObjs[parentId];
+                        if (parent.__children__) {
+                            parent.__children__.push(item);
+                        } else {
+                            parent.__children__ = [item];
+                        }
+                    } else {
+                        rootIds.push(_primary);
+                    }
+                }
+                len = rootIds.length;
+                for (i = 0; i < len; i++) {
+                    tree.push(treeObjs[rootIds[i]]);
+                }
+                return tree;
+            },
+            tree2tree: function (data, parentKey) {
+                var access_child = function (data) {
+                    var _tree = [];
+                    var _i, _len = data.length, _copy, _child;
+                    for (_i = 0; _i < _len; _i++) {
+                        _copy = angular.copy(data[_i]);
+                        if (angular.isArray(_copy[parentKey]) && _copy[parentKey].length > 0) {
+                            _child = access_child(_copy[parentKey]);
+                            delete(_copy[parentKey]);
+                            _copy.__children__ = _child;
+                        }
+                        _tree.push(_copy);
+                    }
+                    return _tree;
+                };
+
+                return access_child(data);
+            }
+        }
+
+        return _$initConvert;
+    }
+).factory(
+    '$TreeDnDHelper', [
+        '$document', '$window', function ($document, $window) {
+            var _$helper = {
+                nodrag:          function (targetElm) {
+                    return (typeof targetElm.attr('data-nodrag')) !== "undefined";
+                },
+                eventObj:        function (e) {
+                    var obj = e;
+                    if (e.targetTouches !== undefined) {
+                        obj = e.targetTouches.item(0);
+                    } else if (e.originalEvent !== undefined && e.originalEvent.targetTouches !== undefined) {
+                        obj = e.originalEvent.targetTouches.item(0);
+                    }
+                    return obj;
+                },
+                dragInfo:        function (scope) {
+                    var _node = scope.getData(),
+                        _tree = scope.getScopeTree(),
+                        _parent = scope.getNode(_node.__parent_real__);
+                    return {
+                        node:    _node,
+                        parent:  _parent,
+                        move:    {
+                            parent: _parent,
+                            pos:    _node.__index__
+                        },
+                        scope:   scope,
+                        target:  _tree,
+                        drag:    _tree,
+                        drop:    scope.getPrevSibling(_node),
+                        changed: false
+                    };
+                },
+                height:          function (element) {
+                    return element.prop('scrollHeight');
+                },
+                width:           function (element) {
+                    return element.prop('scrollWidth');
+                },
+                offset:          function (element) {
+                    var boundingClientRect = element[0].getBoundingClientRect();
+                    return {
+                        width:  element.prop('offsetWidth'),
+                        height: element.prop('offsetHeight'),
+                        top:    boundingClientRect.top + ($window.pageYOffset || $document[0].body.scrollTop || $document[0].documentElement.scrollTop),
+                        left:   boundingClientRect.left + ($window.pageXOffset || $document[0].body.scrollLeft || $document[0].documentElement.scrollLeft)
+                    };
+                },
+                positionStarted: function (e, target) {
+                    var pos = {};
+                    pos.offsetX = e.pageX - this.offset(target).left;
+                    pos.offsetY = e.pageY - this.offset(target).top;
+                    pos.startX = pos.lastX = e.pageX;
+                    pos.startY = pos.lastY = e.pageY;
+                    pos.nowX = pos.nowY = pos.distX = pos.distY = pos.dirAx = 0;
+                    pos.dirX = pos.dirY = pos.lastDirX = pos.lastDirY = pos.distAxX = pos.distAxY = 0;
+                    return pos;
+                },
+                positionMoved:   function (e, pos, firstMoving) {
+                    // mouse position last events
+                    pos.lastX = pos.nowX;
+                    pos.lastY = pos.nowY;
+                    // mouse position this events
+                    pos.nowX = e.pageX;
+                    pos.nowY = e.pageY;
+                    // distance mouse moved between events
+                    pos.distX = pos.nowX - pos.lastX;
+                    pos.distY = pos.nowY - pos.lastY;
+                    // direction mouse was moving
+                    pos.lastDirX = pos.dirX;
+                    pos.lastDirY = pos.dirY;
+                    // direction mouse is now moving (on both axis)
+                    pos.dirX = pos.distX === 0 ? 0 : pos.distX > 0 ? 1 : -1;
+                    pos.dirY = pos.distY === 0 ? 0 : pos.distY > 0 ? 1 : -1;
+                    // axis mouse is now moving on
+                    var newAx = Math.abs(pos.distX) > Math.abs(pos.distY) ? 1 : 0;
+                    // do nothing on first move
+                    if (firstMoving) {
+                        pos.dirAx = newAx;
+                        pos.moving = true;
+                        return;
+                    }
+                    // calc distance moved on this axis (and direction)
+                    if (pos.dirAx !== newAx) {
+                        pos.distAxX = 0;
+                        pos.distAxY = 0;
+                    } else {
+                        pos.distAxX += Math.abs(pos.distX);
+                        if (pos.dirX !== 0 && pos.dirX !== pos.lastDirX) {
+                            pos.distAxX = 0;
+                        }
+                        pos.distAxY += Math.abs(pos.distY);
+                        if (pos.dirY !== 0 && pos.dirY !== pos.lastDirY) {
+                            pos.distAxY = 0;
+                        }
+                    }
+                    pos.dirAx = newAx;
+                },
+                replaceIndent:   function (scope, element, indent, attr) {
+                    attr = attr ? attr : 'left';
+                    angular.element(element.children()[0]).css(attr, scope.$callbacks.calsIndent(indent));
+                }
+            };
+            return _$helper;
+        }]
+).factory(
+    '$TreeDnDPlugin',['$injector', function ($injector) {
+        var _fnget = function (name) {
+                if (angular.isDefined($injector) && $injector.has(name)) {
+                    return $injector.get(name);
+                }
+                return null;
+            };
+        return _fnget;
+    }]
+).factory(
+    '$TreeDnDTemplate', [
+        '$templateCache', function ($templateCache) {
+            var templatePath = 'template/TreeDnD/TreeDnD.html',
+                copyPath = 'template/TreeDnD/TreeDnDStatusCopy.html',
+                movePath = 'template/TreeDnD/TreeDnDStatusMove.html',
+                scopes = {},
+                temp,
+                _$init = {
+                    setMove: function (path, scope) {
+                        if (!scopes[scope.$id]) {
+                            scopes[scope.$id] = {};
+                        }
+                        scopes[scope.$id].movePath = path;
+                    },
+                    setCopy: function (path, scope) {
+                        if (!scopes[scope.$id]) {
+                            scopes[scope.$id] = {};
+                        }
+                        scopes[scope.$id].copyPath = path;
+                    },
+                    getPath: function () {
+                        return templatePath;
+                    },
+                    getCopy: function (scope) {
+                        if (scopes[scope.$id] && scopes[scope.$id].copyPath) {
+                            temp = $templateCache.get(scopes[scope.$id].copyPath);
+                            if (temp) {
+                                return temp;
+                            }
+                        }
+                        return $templateCache.get(copyPath);
+                    },
+                    getMove: function (scope) {
+                        if (scopes[scope.$id] && scopes[scope.$id].movePath) {
+                            temp = $templateCache.get(scopes[scope.$id].movePath);
+                            if (temp) {
+                                return temp;
+                            }
+                        }
+                        return $templateCache.get(movePath);
+                    }
+                };
+
+            return _$init;
+        }]
+).factory(
+    '$TreeDnDFilter', [
+        '$filter', function ($filter) {
+            var _iF, _lenF, _keysF,
+                _filter,
+                _state,
+                for_all_descendants = function for_all_descendants(options, node, fieldChild, fnBefore, fnAfter, parentPassed) {
+                    if (!angular.isFunction(fnBefore)) {
+                        return null;
+                    }
+
+                    var _i, _len, _nodes,
+                        _nodePassed = fnBefore(options, node),
+                        _childPassed = false;
+
+                    if (angular.isDefined(node[fieldChild])) {
+                        _nodes = node[fieldChild];
+                        _len = _nodes.length;
+                        for (_i = 0; _i < _len; _i++) {
+                            _childPassed = for_all_descendants(
+                                options,
+                                _nodes[_i],
+                                fieldChild,
+                                fnBefore,
+                                fnAfter,
+                                _nodePassed || parentPassed
+                            ) || _childPassed;
+                        }
+                    }
+
+                    if (angular.isFunction(fnAfter)) {
+                        fnAfter(options, node, _nodePassed === true, _childPassed === true, parentPassed === true);
+                    }
+
+                    return _nodePassed || _childPassed;
+                },
+                // Check data by filter
+                _fnCheck = function _fnCheck(callback, check) {
+                    if (angular.isUndefinedOrNull(check) || angular.isArray(check)) {
+                        return null;
+                    }
+
+                    if (angular.isFunction(callback)) {
+                        return callback(check, $filter);
+                    } else {
+                        if (typeof callback === 'boolean') {
+                            check = !!check;
+                            return check === callback;
+                        } else if (angular.isDefined(callback)) {
+                            try {
+                                var _regex = new RegExp(callback);
+                                return _regex.test(check);
+                            }
+                            catch (err) {
+                                if (typeof check === 'string') {
+                                    return check.indexOf(callback) > -1;
+                                } else {
+                                    return null;
+                                }
+                            }
+                        } else {
+                            return null;
+                        }
+                    }
+                },
+                _fnProccess = function _fnProccess(node, condition, isAnd) {
+                    if (angular.isArray(condition)) {
+                        return for_each_filter(node, condition, isAnd);
+                    } else {
+                        var _key = condition.field,
+                            _callback = condition.callback,
+                            _iO, _keysO, _lenO;
+
+                        if (_key === '_$') {
+                            _keysO = Object.keys(node);
+                            _lenO = _keysO.length;
+                            for (_iO = 0; _iO < _lenO; _iO++) {
+                                if (_fnCheck(_callback, node[_keysO[_iO]])) {
+                                    return true;
+                                }
+                            }
+                        } else if (angular.isDefined(node[_key])) {
+                            return _fnCheck(_callback, node[_key]);
+                        }
+                    }
+                },
+                for_each_filter = function for_each_filter(node, conditions, isAnd) {
+                    var i, len = conditions.length, passed = false;
+                    if (len === 0) {
+                        return null;
+                    }
+
+                    for (i = 0; i < len; i++) {
+                        if (_fnProccess(node, conditions[i], !isAnd)) {
+                            passed = true;
+                            // if condition `or` then return;
+                            if (!isAnd) {
+                                return true;
+                            }
+                        } else {
+
+                            // if condition `and` and result in fnProccess = false then return;
+                            if (isAnd) {
+                                return false;
+                            }
+                        }
+                    }
+
+                    return passed;
+                },
+
+                // Will call _fnAfter to clear data no need
+                _fnAfter = function _fnAfter(options, node, isNodePassed, isChildPassed, isParentPassed) {
+                    if (isNodePassed === true) {
+                        node.__filtered__ = true;
+                        node.__filtered_visible__ = true;
+                        return; //jmp
+                    } else if ((isChildPassed === true && options.showParent === true)
+                               || (isParentPassed === true && options.showChild === true)) {
+                        node.__filtered__ = false;
+                        node.__filtered_visible__ = true;
+                        return; //jmp
+                    }
+
+                    // remove attr __filtered__
+                    delete(node.__filtered__);
+                    delete(node.__filtered_visible__);
+                },
+                _fnBefore = function _fnBefore(options, node) {
+                    if (options.filter.length === 0) {
+                        return true;
+                    } else {
+                        return _fnProccess(node, options.filter, options.beginAnd || false);
+                    }
+                },
+                _fnConvert = function _fnConvert(filters) {
+                    // convert filter object to array filter
+                    if (angular.isObject(filters) && !angular.isArray(filters)) {
+                        _keysF = Object.keys(filters);
+                        _lenF = _keysF.length;
+                        _filter = [];
+
+                        if (_lenF > 0) {
+                            for (_iF = 0; _iF < _lenF; _iF++) {
+
+                                if ((typeof filters[_keysF[_iF]]) === 'string' && filters[_keysF[_iF]].length === 0) {
+                                    continue;
+                                } else if (angular.isArray(filters[_keysF[_iF]])) {
+                                    _state = filters[_keysF[_iF]];
+                                } else if (angular.isObject(filters[_keysF[_iF]])) {
+                                    _state = _fnConvert(filters[_keysF[_iF]]);
+                                } else {
+                                    _state = {
+                                        field:    _keysF[_iF],
+                                        callback: filters[_keysF[_iF]]
+                                    };
+                                }
+                                _filter.push(_state);
+                            }
+                        }
+                        _state = null;
+                        return _filter;
+                    }
+                    else {
+                        return filters;
+                    }
+                },
+                _fnMain = function _fnMain(treeData, filters, _options) {
+                    if (!angular.isArray(treeData)
+                        || treeData.length === 0
+                        || !(angular.isArray(filters) || angular.isObject(filters))
+                        || filters.length === 0) {
+                        return treeData;
+                    }
+
+                    var _i, _len,
+                        _filter;
+
+                    _filter = _fnConvert(filters);
+                    if (!(angular.isArray(_filter) || angular.isObject(_filter))
+                        || _filter.length === 0) {
+                        return treeData;
+                    }
+                    _options.filter = _filter;
+                    for (_i = 0, _len = treeData.length; _i < _len; _i++) {
+                        for_all_descendants(
+                            _options,
+                            treeData[_i],
+                            '__children__',
+                            _fnBefore, _fnAfter
+                        );
+                    }
+
+                    return treeData;
+                };
+
+            return _fnMain;
+        }]
+).factory(
+    '$TreeDnDOrderBy', [
+        '$filter', function ($filter) {
+            var _fnOrderBy = $filter('orderBy'),
+                for_all_descendants = function for_all_descendants(options, node, name, fnOrderBy) {
+                    var _i, _len, _nodes;
+
+                    if (angular.isDefined(node[name])) {
+                        _nodes = node[name];
+                        _len = _nodes.length;
+                        // OrderBy children
+                        for (_i = 0; _i < _len; _i++) {
+                            _nodes[_i] = for_all_descendants(options, _nodes[_i], name, fnOrderBy);
+                        }
+
+                        node[name] = fnOrderBy(node[name], options);
+                    }
+                    return node;
+                },
+                _fnOrder = function _fnOrder(list, orderBy) {
+                    return _fnOrderBy(list, orderBy);
+                },
+                _fnMain = function _fnMain(treeData, orderBy) {
+                    if (!angular.isArray(treeData)
+                        || treeData.length === 0
+                        || !(angular.isArray(orderBy) || angular.isObject(orderBy) || angular.isString(orderBy) || angular.isFunction(orderBy))
+                        || (orderBy.length === 0 && !angular.isFunction(orderBy))) {
+                        return treeData;
+                    }
+
+                    var _i, _len,
+                        _iF, _lenF, _keysF;
+
+                    for (_i = 0, _len = treeData.length; _i < _len; _i++) {
+                        treeData[_i] = for_all_descendants(
+                            orderBy,
+                            treeData[_i],
+                            '__children__',
+                            _fnOrder
+                        );
+                    }
+
+                    treeData = _fnOrder(treeData, orderBy);
+                    return treeData;
+                };
+
+            return _fnMain;
+        }]
+);
+
+angular.module('template/TreeDnD/TreeDnD.html', []).run(
+    [
+        '$templateCache', function ($templateCache) {
+        $templateCache.put(
+            'template/TreeDnD/TreeDnD.html',
+            ["<table ng-class=\"$tree_class\">",
+             "    <thead>",
+             "  <tr>",
+             "     <th ng-class=\"expandingProperty.titleClass\" ng-style=\"expandingProperty.titleStyle\">",
+             "         {{expandingProperty.displayName || expandingProperty.field || expandingProperty}}",
+             "        <\/th>",
+             "        <th ng-repeat=\"col in colDefinitions\" ng-class=\"col.titleClass\" ng-style=\"col.titleStyle\">",
+             "         {{col.displayName || col.field}}",
+             "     </th>",
+             "    </tr>",
+             "    </thead>",
+             " <tbody tree-dnd-nodes=\"tree_nodes\">",
+             "  <tr tree-dnd-node=\"node\" ng-repeat=\"node in nodes track by node.__hashKey__ \" ng-show=\"node.__visible__\"",
+             "       ng-click=\"onSelect(node)\" ng-class=\"(node.__selected__ ? ' active':'')\">",
+             "        <td ng-if=\"!expandingProperty.template\" tree-dnd-node-handle",
+             "         ng-style=\"expandingProperty.cellStyle ? expandingProperty.cellStyle : {'padding-left': $callbacks.calsIndent(node.__level__)}\"",
+             "          ng-class=\"expandingProperty.cellClass\"",
+             "            compile=\"expandingProperty.cellTemplate\">",
+             "              <a data-nodrag>",
+             "                  <i ng-class=\"$icon_class\" ng-click=\"toggleExpand(node)\"",
+             "                     class=\"tree-icon\"></i>",
+             "              </a>",
+             "             {{node[expandingProperty.field] || node[expandingProperty]}}",
+             "       </td>",
+             "        <td ng-if=\"expandingProperty.template\" compile=\"expandingProperty.template\"></td>",
+             "        <td ng-repeat=\"col in colDefinitions\" ng-class=\"col.cellClass\" ng-style=\"col.cellStyle\"",
+             "            compile=\"col.cellTemplate\">",
+             "            {{node[col.field]}}",
+             "       </td>",
+             "    </tr>",
+             "    </tbody>",
+             "</table>"].join('')
+        );
+
+        $templateCache.put(
+            'template/TreeDnD/TreeDnDStatusCopy.html',
+            "<label><i class=\"fa fa-copy\"></i>&nbsp;<b>Copying</b></label>"
+        );
+
+        $templateCache.put(
+            'template/TreeDnD/TreeDnDStatusMove.html',
+            '<label><i class="fa fa-file-text"></i>&nbsp;<b>Moving</b></label>'
+        );
+    }]
+);
+
+}).call(window);
+/*
+ AngularJS v1.4.7
+ (c) 2010-2015 Google, Inc. http://angularjs.org
+ License: MIT
+ */
+(function(G,t,Ra){'use strict';function va(a,b,c){if(!a)throw ngMinErr("areq",b||"?",c||"required");return a}function wa(a,b){if(!a&&!b)return"";if(!a)return b;if(!b)return a;W(a)&&(a=a.join(" "));W(b)&&(b=b.join(" "));return a+" "+b}function Ha(a){var b={};a&&(a.to||a.from)&&(b.to=a.to,b.from=a.from);return b}function S(a,b,c){var d="";a=W(a)?a:a&&M(a)&&a.length?a.split(/\s+/):[];q(a,function(a,u){a&&0<a.length&&(d+=0<u?" ":"",d+=c?b+a:a+b)});return d}function Ia(a){if(a instanceof J)switch(a.length){case 0:return[];
+  case 1:if(1===a[0].nodeType)return a;break;default:return J(la(a))}if(1===a.nodeType)return J(a)}function la(a){if(!a[0])return a;for(var b=0;b<a.length;b++){var c=a[b];if(1==c.nodeType)return c}}function Ja(a,b,c){q(b,function(b){a.addClass(b,c)})}function Ka(a,b,c){q(b,function(b){a.removeClass(b,c)})}function P(a){return function(b,c){c.addClass&&(Ja(a,b,c.addClass),c.addClass=null);c.removeClass&&(Ka(a,b,c.removeClass),c.removeClass=null)}}function ha(a){a=a||{};if(!a.$$prepared){var b=a.domOperation||
+    L;a.domOperation=function(){a.$$domOperationFired=!0;b();b=L};a.$$prepared=!0}return a}function da(a,b){xa(a,b);ya(a,b)}function xa(a,b){b.from&&(a.css(b.from),b.from=null)}function ya(a,b){b.to&&(a.css(b.to),b.to=null)}function Q(a,b,c){var d=(b.addClass||"")+" "+(c.addClass||""),g=(b.removeClass||"")+" "+(c.removeClass||"");a=La(a.attr("class"),d,g);c.preparationClasses&&(b.preparationClasses=X(c.preparationClasses,b.preparationClasses),delete c.preparationClasses);d=b.domOperation!==L?b.domOperation:
+    null;za(b,c);d&&(b.domOperation=d);b.addClass=a.addClass?a.addClass:null;b.removeClass=a.removeClass?a.removeClass:null;return b}function La(a,b,c){function d(a){M(a)&&(a=a.split(" "));var b={};q(a,function(a){a.length&&(b[a]=!0)});return b}var g={};a=d(a);b=d(b);q(b,function(a,b){g[b]=1});c=d(c);q(c,function(a,b){g[b]=1===g[b]?null:-1});var u={addClass:"",removeClass:""};q(g,function(b,c){var g,d;1===b?(g="addClass",d=!a[c]):-1===b&&(g="removeClass",d=a[c]);d&&(u[g].length&&(u[g]+=" "),u[g]+=c)});
+  return u}function H(a){return a instanceof t.element?a[0]:a}function Ma(a,b,c){var d="";b&&(d=S(b,"ng-",!0));c.addClass&&(d=X(d,S(c.addClass,"-add")));c.removeClass&&(d=X(d,S(c.removeClass,"-remove")));d.length&&(c.preparationClasses=d,a.addClass(d))}function ia(a,b){var c=b?"-"+b+"s":"";ea(a,[fa,c]);return[fa,c]}function ma(a,b){var c=b?"paused":"",d=T+"PlayState";ea(a,[d,c]);return[d,c]}function ea(a,b){a.style[b[0]]=b[1]}function X(a,b){return a?b?a+" "+b:a:b}function Aa(a,b,c){var d=Object.create(null),
+    g=a.getComputedStyle(b)||{};q(c,function(a,b){var c=g[a];if(c){var f=c.charAt(0);if("-"===f||"+"===f||0<=f)c=Na(c);0===c&&(c=null);d[b]=c}});return d}function Na(a){var b=0;a=a.split(/\s*,\s*/);q(a,function(a){"s"==a.charAt(a.length-1)&&(a=a.substring(0,a.length-1));a=parseFloat(a)||0;b=b?Math.max(a,b):a});return b}function na(a){return 0===a||null!=a}function Ba(a,b){var c=N,d=a+"s";b?c+="Duration":d+=" linear all";return[c,d]}function Ca(){var a=Object.create(null);return{flush:function(){a=Object.create(null)},
+  count:function(b){return(b=a[b])?b.total:0},get:function(b){return(b=a[b])&&b.value},put:function(b,c){a[b]?a[b].total++:a[b]={total:1,value:c}}}}function Da(a,b,c){q(c,function(c){a[c]=U(a[c])?a[c]:b.style.getPropertyValue(c)})}var L=t.noop,za=t.extend,J=t.element,q=t.forEach,W=t.isArray,M=t.isString,oa=t.isObject,pa=t.isUndefined,U=t.isDefined,Ea=t.isFunction,qa=t.isElement,N,ra,T,sa;pa(G.ontransitionend)&&U(G.onwebkittransitionend)?(N="WebkitTransition",ra="webkitTransitionEnd transitionend"):
+    (N="transition",ra="transitionend");pa(G.onanimationend)&&U(G.onwebkitanimationend)?(T="WebkitAnimation",sa="webkitAnimationEnd animationend"):(T="animation",sa="animationend");var ja=T+"Delay",ta=T+"Duration",fa=N+"Delay";G=N+"Duration";var Oa={transitionDuration:G,transitionDelay:fa,transitionProperty:N+"Property",animationDuration:ta,animationDelay:ja,animationIterationCount:T+"IterationCount"},Pa={transitionDuration:G,transitionDelay:fa,animationDuration:ta,animationDelay:ja};t.module("ngAnimate",
+    []).directive("ngAnimateChildren",[function(){return function(a,b,c){a=c.ngAnimateChildren;t.isString(a)&&0===a.length?b.data("$$ngAnimateChildren",!0):c.$observe("ngAnimateChildren",function(a){b.data("$$ngAnimateChildren","on"===a||"true"===a)})}}]).factory("$$rAFScheduler",["$$rAF",function(a){function b(a){d=d.concat(a);c()}function c(){if(d.length){for(var b=d.shift(),z=0;z<b.length;z++)b[z]();g||a(function(){g||c()})}}var d,g;d=b.queue=[];b.waitUntilQuiet=function(b){g&&g();g=a(function(){g=
+        null;b();c()})};return b}]).factory("$$AnimateRunner",["$q","$sniffer","$$animateAsyncRun",function(a,b,c){function d(a){this.setHost(a);this._doneCallbacks=[];this._runInAnimationFrame=c();this._state=0}d.chain=function(a,b){function c(){if(d===a.length)b(!0);else a[d](function(a){!1===a?b(!1):(d++,c())})}var d=0;c()};d.all=function(a,b){function c(z){f=f&&z;++d===a.length&&b(f)}var d=0,f=!0;q(a,function(a){a.done(c)})};d.prototype={setHost:function(a){this.host=a||{}},done:function(a){2===this._state?
+        a():this._doneCallbacks.push(a)},progress:L,getPromise:function(){if(!this.promise){var b=this;this.promise=a(function(a,c){b.done(function(b){!1===b?c():a()})})}return this.promise},then:function(a,b){return this.getPromise().then(a,b)},"catch":function(a){return this.getPromise()["catch"](a)},"finally":function(a){return this.getPromise()["finally"](a)},pause:function(){this.host.pause&&this.host.pause()},resume:function(){this.host.resume&&this.host.resume()},end:function(){this.host.end&&this.host.end();
+      this._resolve(!0)},cancel:function(){this.host.cancel&&this.host.cancel();this._resolve(!1)},complete:function(a){var b=this;0===b._state&&(b._state=1,b._runInAnimationFrame(function(){b._resolve(a)}))},_resolve:function(a){2!==this._state&&(q(this._doneCallbacks,function(b){b(a)}),this._doneCallbacks.length=0,this._state=2)}};return d}]).factory("$$animateAsyncRun",["$$rAF",function(a){function b(b){c.push(b);1<c.length||a(function(){for(var a=0;a<c.length;a++)c[a]();c=[]})}var c=[];return function(){var a=
+        !1;b(function(){a=!0});return function(c){a?c():b(c)}}}]).provider("$$animateQueue",["$animateProvider",function(a){function b(a,b,c,q){return d[a].some(function(a){return a(b,c,q)})}function c(a,b){a=a||{};var c=0<(a.addClass||"").length,d=0<(a.removeClass||"").length;return b?c&&d:c||d}var d=this.rules={skip:[],cancel:[],join:[]};d.join.push(function(a,b,d){return!b.structural&&c(b.options)});d.skip.push(function(a,b,d){return!b.structural&&!c(b.options)});d.skip.push(function(a,b,c){return"leave"==
+        c.event&&b.structural});d.skip.push(function(a,b,c){return c.structural&&2===c.state&&!b.structural});d.cancel.push(function(a,b,c){return c.structural&&b.structural});d.cancel.push(function(a,b,c){return 2===c.state&&b.structural});d.cancel.push(function(a,b,c){a=b.options;c=c.options;return a.addClass&&a.addClass===c.removeClass||a.removeClass&&a.removeClass===c.addClass});this.$get=["$$rAF","$rootScope","$rootElement","$document","$$HashMap","$$animation","$$AnimateRunner","$templateRequest","$$jqLite",
+      "$$forceReflow",function(d,u,z,x,f,k,$,t,h,I){function A(){var a=!1;return function(b){a?b():u.$$postDigest(function(){a=!0;b()})}}function Y(a,b){var c=H(a),e=[],d=v[b];d&&q(d,function(a){a.node.contains(c)&&e.push(a.callback)});return e}function E(a,e,l){function n(b,c,e,v){z(function(){var b=Y(a,c);b.length&&d(function(){q(b,function(b){b(a,e,v)})})});b.progress(c,e,v)}function v(b){var c=a,e=l;e.preparationClasses&&(c.removeClass(e.preparationClasses),e.preparationClasses=null);e.activeClasses&&
+      (c.removeClass(e.activeClasses),e.activeClasses=null);Ga(a,l);da(a,l);l.domOperation();f.complete(!b)}var s,C;if(a=Ia(a))s=H(a),C=a.parent();l=ha(l);var f=new $,z=A();W(l.addClass)&&(l.addClass=l.addClass.join(" "));l.addClass&&!M(l.addClass)&&(l.addClass=null);W(l.removeClass)&&(l.removeClass=l.removeClass.join(" "));l.removeClass&&!M(l.removeClass)&&(l.removeClass=null);l.from&&!oa(l.from)&&(l.from=null);l.to&&!oa(l.to)&&(l.to=null);if(!s)return v(),f;var h=[s.className,l.addClass,l.removeClass].join(" ");
+        if(!Qa(h))return v(),f;var E=0<=["enter","move","leave"].indexOf(e),x=!F||D.get(s),h=!x&&m.get(s)||{},I=!!h.state;x||I&&1==h.state||(x=!ka(a,C,e));if(x)return v(),f;E&&w(a);C={structural:E,element:a,event:e,close:v,options:l,runner:f};if(I){if(b("skip",a,C,h)){if(2===h.state)return v(),f;Q(a,h.options,l);return h.runner}if(b("cancel",a,C,h))if(2===h.state)h.runner.end();else if(h.structural)h.close();else return Q(a,h.options,C.options),h.runner;else if(b("join",a,C,h))if(2===h.state)Q(a,l,{});else return Ma(a,
+            E?e:null,l),e=C.event=h.event,l=Q(a,h.options,C.options),h.runner}else Q(a,l,{});(I=C.structural)||(I="animate"===C.event&&0<Object.keys(C.options.to||{}).length||c(C.options));if(!I)return v(),y(a),f;var t=(h.counter||0)+1;C.counter=t;r(a,1,C);u.$$postDigest(function(){var b=m.get(s),d=!b,b=b||{},h=0<(a.parent()||[]).length&&("animate"===b.event||b.structural||c(b.options));if(d||b.counter!==t||!h){d&&(Ga(a,l),da(a,l));if(d||E&&b.event!==e)l.domOperation(),f.end();h||y(a)}else e=!b.structural&&c(b.options,
+            !0)?"setClass":b.event,r(a,2),b=k(a,e,b.options),b.done(function(b){v(!b);(b=m.get(s))&&b.counter===t&&y(H(a));n(f,e,"close",{})}),f.setHost(b),n(f,e,"start",{})});return f}function w(a){a=H(a).querySelectorAll("[data-ng-animate]");q(a,function(a){var b=parseInt(a.getAttribute("data-ng-animate")),c=m.get(a);switch(b){case 2:c.runner.end();case 1:c&&m.remove(a)}})}function y(a){a=H(a);a.removeAttribute("data-ng-animate");m.remove(a)}function e(a,b){return H(a)===H(b)}function ka(a,b,c){c=J(x[0].body);
+        var d=e(a,c)||"HTML"===a[0].nodeName,v=e(a,z),n=!1,y;for((a=a.data("$ngAnimatePin"))&&(b=a);b&&b.length;){v||(v=e(b,z));a=b[0];if(1!==a.nodeType)break;var r=m.get(a)||{};n||(n=r.structural||D.get(a));if(pa(y)||!0===y)a=b.data("$$ngAnimateChildren"),U(a)&&(y=a);if(n&&!1===y)break;v||(v=e(b,z),v||(a=b.data("$ngAnimatePin"))&&(b=a));d||(d=e(b,c));b=b.parent()}return(!n||y)&&v&&d}function r(a,b,c){c=c||{};c.state=b;a=H(a);a.setAttribute("data-ng-animate",b);c=(b=m.get(a))?za(b,c):c;m.put(a,c)}var m=new f,
+          D=new f,F=null,s=u.$watch(function(){return 0===t.totalPendingRequests},function(a){a&&(s(),u.$$postDigest(function(){u.$$postDigest(function(){null===F&&(F=!0)})}))}),v={},n=a.classNameFilter(),Qa=n?function(a){return n.test(a)}:function(){return!0},Ga=P(h);return{on:function(a,b,c){b=la(b);v[a]=v[a]||[];v[a].push({node:b,callback:c})},off:function(a,b,c){function e(a,b,c){var d=la(b);return a.filter(function(a){return!(a.node===d&&(!c||a.callback===c))})}var d=v[a];d&&(v[a]=1===arguments.length?
+          null:e(d,b,c))},pin:function(a,b){va(qa(a),"element","not an element");va(qa(b),"parentElement","not an element");a.data("$ngAnimatePin",b)},push:function(a,b,c,e){c=c||{};c.domOperation=e;return E(a,b,c)},enabled:function(a,b){var c=arguments.length;if(0===c)b=!!F;else if(qa(a)){var e=H(a),d=D.get(e);1===c?b=!d:(b=!!b)?d&&D.remove(e):D.put(e,!0)}else b=F=!!a;return b}}}]}]).provider("$$animation",["$animateProvider",function(a){function b(a){return a.data("$$animationRunner")}var c=this.drivers=
+        [];this.$get=["$$jqLite","$rootScope","$injector","$$AnimateRunner","$$HashMap","$$rAFScheduler",function(a,g,u,z,x,f){function k(a){function b(a){if(a.processed)return a;a.processed=!0;var e=a.domNode,d=e.parentNode;f.put(e,a);for(var r;d;){if(r=f.get(d)){r.processed||(r=b(r));break}d=d.parentNode}(r||c).children.push(a);return a}var c={children:[]},d,f=new x;for(d=0;d<a.length;d++){var g=a[d];f.put(g.domNode,a[d]={domNode:g.domNode,fn:g.fn,children:[]})}for(d=0;d<a.length;d++)b(a[d]);return function(a){var b=
+        [],c=[],d;for(d=0;d<a.children.length;d++)c.push(a.children[d]);a=c.length;var m=0,f=[];for(d=0;d<c.length;d++){var g=c[d];0>=a&&(a=m,m=0,b.push(f),f=[]);f.push(g.fn);g.children.forEach(function(a){m++;c.push(a)});a--}f.length&&b.push(f);return b}(c)}var $=[],t=P(a);return function(h,x,A){function Y(a){a=a.hasAttribute("ng-animate-ref")?[a]:a.querySelectorAll("[ng-animate-ref]");var b=[];q(a,function(a){var c=a.getAttribute("ng-animate-ref");c&&c.length&&b.push(a)});return b}function E(a){var b=[],
+        c={};q(a,function(a,e){var d=H(a.element),v=0<=["enter","move"].indexOf(a.event),d=a.structural?Y(d):[];if(d.length){var m=v?"to":"from";q(d,function(a){var b=a.getAttribute("ng-animate-ref");c[b]=c[b]||{};c[b][m]={animationID:e,element:J(a)}})}else b.push(a)});var e={},d={};q(c,function(c,m){var f=c.from,y=c.to;if(f&&y){var g=a[f.animationID],r=a[y.animationID],s=f.animationID.toString();if(!d[s]){var h=d[s]={structural:!0,beforeStart:function(){g.beforeStart();r.beforeStart()},close:function(){g.close();
+      r.close()},classes:w(g.classes,r.classes),from:g,to:r,anchors:[]};h.classes.length?b.push(h):(b.push(g),b.push(r))}d[s].anchors.push({out:f.element,"in":y.element})}else f=f?f.animationID:y.animationID,y=f.toString(),e[y]||(e[y]=!0,b.push(a[f]))});return b}function w(a,b){a=a.split(" ");b=b.split(" ");for(var c=[],e=0;e<a.length;e++){var d=a[e];if("ng-"!==d.substring(0,3))for(var m=0;m<b.length;m++)if(d===b[m]){c.push(d);break}}return c.join(" ")}function y(a){for(var b=c.length-1;0<=b;b--){var e=
+        c[b];if(u.has(e)&&(e=u.get(e)(a)))return e}}function e(a,c){a.from&&a.to?(b(a.from.element).setHost(c),b(a.to.element).setHost(c)):b(a.element).setHost(c)}function ka(){var a=b(h);!a||"leave"===x&&A.$$domOperationFired||a.end()}function r(b){h.off("$destroy",ka);h.removeData("$$animationRunner");t(h,A);da(h,A);A.domOperation();s&&a.removeClass(h,s);h.removeClass("ng-animate");D.complete(!b)}A=ha(A);var m=0<=["enter","move","leave"].indexOf(x),D=new z({end:function(){r()},cancel:function(){r(!0)}});
+      if(!c.length)return r(),D;h.data("$$animationRunner",D);var F=wa(h.attr("class"),wa(A.addClass,A.removeClass)),s=A.tempClasses;s&&(F+=" "+s,A.tempClasses=null);$.push({element:h,classes:F,event:x,structural:m,options:A,beforeStart:function(){h.addClass("ng-animate");s&&a.addClass(h,s)},close:r});h.on("$destroy",ka);if(1<$.length)return D;g.$$postDigest(function(){var a=[];q($,function(c){b(c.element)?a.push(c):c.close()});$.length=0;var c=E(a),d=[];q(c,function(a){d.push({domNode:H(a.from?a.from.element:
+          a.element),fn:function(){a.beforeStart();var c,d=a.close;if(b(a.anchors?a.from.element||a.to.element:a.element)){var m=y(a);m&&(c=m.start)}c?(c=c(),c.done(function(a){d(!a)}),e(a,c)):d()}})});f(k(d))});return D}}]}]).provider("$animateCss",["$animateProvider",function(a){var b=Ca(),c=Ca();this.$get=["$window","$$jqLite","$$AnimateRunner","$timeout","$$forceReflow","$sniffer","$$rAFScheduler","$animate",function(a,g,u,z,x,f,k,t){function Fa(a,b){var c=a.parentNode;return(c.$$ngAnimateParentKey||(c.$$ngAnimateParentKey=
+            ++E))+"-"+a.getAttribute("class")+"-"+b}function h(f,e,h,r){var m;0<b.count(h)&&(m=c.get(h),m||(e=S(e,"-stagger"),g.addClass(f,e),m=Aa(a,f,r),m.animationDuration=Math.max(m.animationDuration,0),m.transitionDuration=Math.max(m.transitionDuration,0),g.removeClass(f,e),c.put(h,m)));return m||{}}function I(a){w.push(a);k.waitUntilQuiet(function(){b.flush();c.flush();for(var a=x(),d=0;d<w.length;d++)w[d](a);w.length=0})}function A(c,e,f){e=b.get(f);e||(e=Aa(a,c,Oa),"infinite"===e.animationIterationCount&&
+    (e.animationIterationCount=1));b.put(f,e);c=e;f=c.animationDelay;e=c.transitionDelay;c.maxDelay=f&&e?Math.max(f,e):f||e;c.maxDuration=Math.max(c.animationDuration*c.animationIterationCount,c.transitionDuration);return c}var Y=P(g),E=0,w=[];return function(a,c){function d(){m()}function r(){m(!0)}function m(b){if(!(E||ua&&l)){E=!0;l=!1;c.$$skipPreparationClasses||g.removeClass(a,Z);g.removeClass(a,X);ma(n,!1);ia(n,!1);q(w,function(a){n.style[a[0]]=""});Y(a,c);da(a,c);Object.keys(v).length&&q(v,function(a,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               b){a?n.style.setProperty(b,a):n.style.removeProperty(b)});if(c.onDone)c.onDone();G&&G.complete(!b)}}function D(a){p.blockTransition&&ia(n,a);p.blockKeyframeAnimation&&ma(n,!!a)}function F(){G=new u({end:d,cancel:r});I(L);m();return{$$willAnimate:!1,start:function(){return G},end:d}}function s(){function b(){if(!E){D(!1);q(w,function(a){n.style[a[0]]=a[1]});Y(a,c);g.addClass(a,X);if(p.recalculateTimingStyles){ga=n.className+" "+Z;aa=Fa(n,ga);B=A(n,ga,aa);V=B.maxDelay;C=Math.max(V,0);K=B.maxDuration;
+      if(0===K){m();return}p.hasTransitions=0<B.transitionDuration;p.hasAnimations=0<B.animationDuration}p.applyAnimationDelay&&(V="boolean"!==typeof c.delay&&na(c.delay)?parseFloat(c.delay):V,C=Math.max(V,0),B.animationDelay=V,ca=[ja,V+"s"],w.push(ca),n.style[ca[0]]=ca[1]);M=1E3*C;P=1E3*K;if(c.easing){var s,k=c.easing;p.hasTransitions&&(s=N+"TimingFunction",w.push([s,k]),n.style[s]=k);p.hasAnimations&&(s=T+"TimingFunction",w.push([s,k]),n.style[s]=k)}B.transitionDuration&&h.push(ra);B.animationDuration&&
+    h.push(sa);r=Date.now();var l=M+1.5*P;s=r+l;var k=a.data("$$animateCss")||[],x=!0;if(k.length){var F=k[0];(x=s>F.expectedEndTime)?z.cancel(F.timer):k.push(m)}x&&(l=z(d,l,!1),k[0]={timer:l,expectedEndTime:s},k.push(m),a.data("$$animateCss",k));a.on(h.join(" "),f);c.to&&(c.cleanupStyles&&Da(v,n,Object.keys(c.to)),ya(a,c))}}function d(){var b=a.data("$$animateCss");if(b){for(var c=1;c<b.length;c++)b[c]();a.removeData("$$animateCss")}}function f(a){a.stopPropagation();var b=a.originalEvent||a;a=b.$manualTimeStamp||
+        b.timeStamp||Date.now();b=parseFloat(b.elapsedTime.toFixed(3));Math.max(a-r,0)>=M&&b>=K&&(ua=!0,m())}if(!E)if(n.parentNode){var r,h=[],s=function(a){if(ua)l&&a&&(l=!1,m());else if(l=!a,B.animationDuration)if(a=ma(n,l),l)w.push(a);else{var b=w,c=b.indexOf(a);0<=a&&b.splice(c,1)}},k=0<U&&(B.transitionDuration&&0===R.transitionDuration||B.animationDuration&&0===R.animationDuration)&&Math.max(R.animationDelay,R.transitionDelay);k?z(b,Math.floor(k*U*1E3),!1):b();J.resume=function(){s(!0)};J.pause=function(){s(!1)}}else m()}
+      var v={},n=H(a);if(!n||!n.parentNode||!t.enabled())return F();c=ha(c);var w=[],x=a.attr("class"),k=Ha(c),E,l,ua,G,J,C,M,K,P;if(0===c.duration||!f.animations&&!f.transitions)return F();var ba=c.event&&W(c.event)?c.event.join(" "):c.event,Q="",O="";ba&&c.structural?Q=S(ba,"ng-",!0):ba&&(Q=ba);c.addClass&&(O+=S(c.addClass,"-add"));c.removeClass&&(O.length&&(O+=" "),O+=S(c.removeClass,"-remove"));c.applyClassesEarly&&O.length&&Y(a,c);var Z=[Q,O].join(" ").trim(),ga=x+" "+Z,X=S(Z,"-active"),x=k.to&&0<
+          Object.keys(k.to).length;if(!(0<(c.keyframeStyle||"").length||x||Z))return F();var aa,R;0<c.stagger?(k=parseFloat(c.stagger),R={transitionDelay:k,animationDelay:k,transitionDuration:0,animationDuration:0}):(aa=Fa(n,ga),R=h(n,Z,aa,Pa));c.$$skipPreparationClasses||g.addClass(a,Z);c.transitionStyle&&(k=[N,c.transitionStyle],ea(n,k),w.push(k));0<=c.duration&&(k=0<n.style[N].length,k=Ba(c.duration,k),ea(n,k),w.push(k));c.keyframeStyle&&(k=[T,c.keyframeStyle],ea(n,k),w.push(k));var U=R?0<=c.staggerIndex?
+          c.staggerIndex:b.count(aa):0;(ba=0===U)&&!c.skipBlocking&&ia(n,9999);var B=A(n,ga,aa),V=B.maxDelay;C=Math.max(V,0);K=B.maxDuration;var p={};p.hasTransitions=0<B.transitionDuration;p.hasAnimations=0<B.animationDuration;p.hasTransitionAll=p.hasTransitions&&"all"==B.transitionProperty;p.applyTransitionDuration=x&&(p.hasTransitions&&!p.hasTransitionAll||p.hasAnimations&&!p.hasTransitions);p.applyAnimationDuration=c.duration&&p.hasAnimations;p.applyTransitionDelay=na(c.delay)&&(p.applyTransitionDuration||
+          p.hasTransitions);p.applyAnimationDelay=na(c.delay)&&p.hasAnimations;p.recalculateTimingStyles=0<O.length;if(p.applyTransitionDuration||p.applyAnimationDuration)K=c.duration?parseFloat(c.duration):K,p.applyTransitionDuration&&(p.hasTransitions=!0,B.transitionDuration=K,k=0<n.style[N+"Property"].length,w.push(Ba(K,k))),p.applyAnimationDuration&&(p.hasAnimations=!0,B.animationDuration=K,w.push([ta,K+"s"]));if(0===K&&!p.recalculateTimingStyles)return F();if(null!=c.delay){var ca=parseFloat(c.delay);
+        p.applyTransitionDelay&&w.push([fa,ca+"s"]);p.applyAnimationDelay&&w.push([ja,ca+"s"])}null==c.duration&&0<B.transitionDuration&&(p.recalculateTimingStyles=p.recalculateTimingStyles||ba);M=1E3*C;P=1E3*K;c.skipBlocking||(p.blockTransition=0<B.transitionDuration,p.blockKeyframeAnimation=0<B.animationDuration&&0<R.animationDelay&&0===R.animationDuration);c.from&&(c.cleanupStyles&&Da(v,n,Object.keys(c.from)),xa(a,c));p.blockTransition||p.blockKeyframeAnimation?D(K):c.skipBlocking||ia(n,!1);return{$$willAnimate:!0,
+        end:d,start:function(){if(!E)return J={end:d,cancel:r,resume:null,pause:null},G=new u(J),I(s),G}}}}]}]).provider("$$animateCssDriver",["$$animationProvider",function(a){a.drivers.push("$$animateCssDriver");this.$get=["$animateCss","$rootScope","$$AnimateRunner","$rootElement","$sniffer","$$jqLite","$document",function(a,c,d,g,u,z,x){function f(a){return a.replace(/\bng-\S+\b/g,"")}function k(a,b){M(a)&&(a=a.split(" "));M(b)&&(b=b.split(" "));return a.filter(function(a){return-1===b.indexOf(a)}).join(" ")}
+      function t(c,h,g){function x(a){var b={},c=H(a).getBoundingClientRect();q(["width","height","top","left"],function(a){var d=c[a];switch(a){case "top":d+=I.scrollTop;break;case "left":d+=I.scrollLeft}b[a]=Math.floor(d)+"px"});return b}function e(){var c=f(g.attr("class")||""),d=k(c,m),c=k(m,c),d=a(r,{to:x(g),addClass:"ng-anchor-in "+d,removeClass:"ng-anchor-out "+c,delay:!0});return d.$$willAnimate?d:null}function z(){r.remove();h.removeClass("ng-animate-shim");g.removeClass("ng-animate-shim")}var r=
+          J(H(h).cloneNode(!0)),m=f(r.attr("class")||"");h.addClass("ng-animate-shim");g.addClass("ng-animate-shim");r.addClass("ng-anchor");A.append(r);var D;c=function(){var c=a(r,{addClass:"ng-anchor-out",delay:!0,from:x(h)});return c.$$willAnimate?c:null}();if(!c&&(D=e(),!D))return z();var F=c||D;return{start:function(){function a(){c&&c.end()}var b,c=F.start();c.done(function(){c=null;if(!D&&(D=e()))return c=D.start(),c.done(function(){c=null;z();b.complete()}),c;z();b.complete()});return b=new d({end:a,
+        cancel:a})}}}function G(a,b,c,f){var e=h(a,L),g=h(b,L),k=[];q(f,function(a){(a=t(c,a.out,a["in"]))&&k.push(a)});if(e||g||0!==k.length)return{start:function(){function a(){q(b,function(a){a.end()})}var b=[];e&&b.push(e.start());g&&b.push(g.start());q(k,function(a){b.push(a.start())});var c=new d({end:a,cancel:a});d.all(b,function(a){c.complete(a)});return c}}}function h(c){var d=c.element,f=c.options||{};c.structural&&(f.event=c.event,f.structural=!0,f.applyClassesEarly=!0,"leave"===c.event&&(f.onDone=
+          f.domOperation));f.preparationClasses&&(f.event=X(f.event,f.preparationClasses));c=a(d,f);return c.$$willAnimate?c:null}if(!u.animations&&!u.transitions)return L;var I=x[0].body;c=H(g);var A=J(c.parentNode&&11===c.parentNode.nodeType||I.contains(c)?c:I);P(z);return function(a){return a.from&&a.to?G(a.from,a.to,a.classes,a.anchors):h(a)}}]}]).provider("$$animateJs",["$animateProvider",function(a){this.$get=["$injector","$$AnimateRunner","$$jqLite",function(b,c,d){function g(c){c=W(c)?c:c.split(" ");
+      for(var d=[],f={},g=0;g<c.length;g++){var q=c[g],u=a.$$registeredAnimations[q];u&&!f[q]&&(d.push(b.get(u)),f[q]=!0)}return d}var u=P(d);return function(a,b,d,k){function t(){k.domOperation();u(a,k)}function G(a,b,d,f,e){switch(d){case "animate":b=[b,f.from,f.to,e];break;case "setClass":b=[b,A,H,e];break;case "addClass":b=[b,A,e];break;case "removeClass":b=[b,H,e];break;default:b=[b,e]}b.push(f);if(a=a.apply(a,b))if(Ea(a.start)&&(a=a.start()),a instanceof c)a.done(e);else if(Ea(a))return a;return L}
+      function h(a,b,d,e,f){var g=[];q(e,function(e){var h=e[f];h&&g.push(function(){var e,f,g=!1,k=function(a){g||(g=!0,(f||L)(a),e.complete(!a))};e=new c({end:function(){k()},cancel:function(){k(!0)}});f=G(h,a,b,d,function(a){k(!1===a)});return e})});return g}function I(a,b,d,e,f){var g=h(a,b,d,e,f);if(0===g.length){var k,u;"beforeSetClass"===f?(k=h(a,"removeClass",d,e,"beforeRemoveClass"),u=h(a,"addClass",d,e,"beforeAddClass")):"setClass"===f&&(k=h(a,"removeClass",d,e,"removeClass"),u=h(a,"addClass",
+          d,e,"addClass"));k&&(g=g.concat(k));u&&(g=g.concat(u))}if(0!==g.length)return function(a){var b=[];g.length&&q(g,function(a){b.push(a())});b.length?c.all(b,a):a();return function(a){q(b,function(b){a?b.cancel():b.end()})}}}3===arguments.length&&oa(d)&&(k=d,d=null);k=ha(k);d||(d=a.attr("class")||"",k.addClass&&(d+=" "+k.addClass),k.removeClass&&(d+=" "+k.removeClass));var A=k.addClass,H=k.removeClass,E=g(d),w,y;if(E.length){var e,J;"leave"==b?(J="leave",e="afterLeave"):(J="before"+b.charAt(0).toUpperCase()+
+          b.substr(1),e=b);"enter"!==b&&"move"!==b&&(w=I(a,b,k,E,J));y=I(a,b,k,E,e)}if(w||y)return{start:function(){function b(c){f=!0;t();da(a,k);g.complete(c)}var d,e=[];w&&e.push(function(a){d=w(a)});e.length?e.push(function(a){t();a(!0)}):t();y&&e.push(function(a){d=y(a)});var f=!1,g=new c({end:function(){f||((d||L)(void 0),b(void 0))},cancel:function(){f||((d||L)(!0),b(!0))}});c.chain(e,b);return g}}}}]}]).provider("$$animateJsDriver",["$$animationProvider",function(a){a.drivers.push("$$animateJsDriver");
+      this.$get=["$$animateJs","$$AnimateRunner",function(a,c){function d(c){return a(c.element,c.event,c.classes,c.options)}return function(a){if(a.from&&a.to){var b=d(a.from),t=d(a.to);if(b||t)return{start:function(){function a(){return function(){q(d,function(a){a.end()})}}var d=[];b&&d.push(b.start());t&&d.push(t.start());c.all(d,function(a){g.complete(a)});var g=new c({end:a(),cancel:a()});return g}}}else return d(a)}}]}])})(window,window.angular);
+//# sourceMappingURL=angular-animate.min.js.map
+/*
+ * angular-ui-bootstrap
+ * http://angular-ui.github.io/bootstrap/
+
+ * Version: 0.14.3 - 2015-10-23
+ * License: MIT
+ */
+angular.module("ui.bootstrap",["ui.bootstrap.tpls","ui.bootstrap.collapse","ui.bootstrap.accordion","ui.bootstrap.alert","ui.bootstrap.buttons","ui.bootstrap.carousel","ui.bootstrap.dateparser","ui.bootstrap.position","ui.bootstrap.datepicker","ui.bootstrap.dropdown","ui.bootstrap.stackedMap","ui.bootstrap.modal","ui.bootstrap.pagination","ui.bootstrap.tooltip","ui.bootstrap.popover","ui.bootstrap.progressbar","ui.bootstrap.rating","ui.bootstrap.tabs","ui.bootstrap.timepicker","ui.bootstrap.typeahead"]),angular.module("ui.bootstrap.tpls",["template/accordion/accordion-group.html","template/accordion/accordion.html","template/alert/alert.html","template/carousel/carousel.html","template/carousel/slide.html","template/datepicker/datepicker.html","template/datepicker/day.html","template/datepicker/month.html","template/datepicker/popup.html","template/datepicker/year.html","template/modal/backdrop.html","template/modal/window.html","template/pagination/pager.html","template/pagination/pagination.html","template/tooltip/tooltip-html-popup.html","template/tooltip/tooltip-popup.html","template/tooltip/tooltip-template-popup.html","template/popover/popover-html.html","template/popover/popover-template.html","template/popover/popover.html","template/progressbar/bar.html","template/progressbar/progress.html","template/progressbar/progressbar.html","template/rating/rating.html","template/tabs/tab.html","template/tabs/tabset.html","template/timepicker/timepicker.html","template/typeahead/typeahead-match.html","template/typeahead/typeahead-popup.html"]),angular.module("ui.bootstrap.collapse",[]).directive("uibCollapse",["$animate","$injector",function(a,b){var c=b.has("$animateCss")?b.get("$animateCss"):null;return{link:function(b,d,e){function f(){d.removeClass("collapse").addClass("collapsing").attr("aria-expanded",!0).attr("aria-hidden",!1),c?c(d,{addClass:"in",easing:"ease",to:{height:d[0].scrollHeight+"px"}}).start()["finally"](g):a.addClass(d,"in",{to:{height:d[0].scrollHeight+"px"}}).then(g)}function g(){d.removeClass("collapsing").addClass("collapse").css({height:"auto"})}function h(){return d.hasClass("collapse")||d.hasClass("in")?(d.css({height:d[0].scrollHeight+"px"}).removeClass("collapse").addClass("collapsing").attr("aria-expanded",!1).attr("aria-hidden",!0),void(c?c(d,{removeClass:"in",to:{height:"0"}}).start()["finally"](i):a.removeClass(d,"in",{to:{height:"0"}}).then(i))):i()}function i(){d.css({height:"0"}),d.removeClass("collapsing").addClass("collapse")}b.$watch(e.uibCollapse,function(a){a?h():f()})}}}]),angular.module("ui.bootstrap.collapse").value("$collapseSuppressWarning",!1).directive("collapse",["$animate","$injector","$log","$collapseSuppressWarning",function(a,b,c,d){var e=b.has("$animateCss")?b.get("$animateCss"):null;return{link:function(b,f,g){function h(){f.removeClass("collapse").addClass("collapsing").attr("aria-expanded",!0).attr("aria-hidden",!1),e?e(f,{easing:"ease",to:{height:f[0].scrollHeight+"px"}}).start().done(i):a.animate(f,{},{height:f[0].scrollHeight+"px"}).then(i)}function i(){f.removeClass("collapsing").addClass("collapse in").css({height:"auto"})}function j(){return f.hasClass("collapse")||f.hasClass("in")?(f.css({height:f[0].scrollHeight+"px"}).removeClass("collapse in").addClass("collapsing").attr("aria-expanded",!1).attr("aria-hidden",!0),void(e?e(f,{to:{height:"0"}}).start().done(k):a.animate(f,{},{height:"0"}).then(k))):k()}function k(){f.css({height:"0"}),f.removeClass("collapsing").addClass("collapse")}d||c.warn("collapse is now deprecated. Use uib-collapse instead."),b.$watch(g.collapse,function(a){a?j():h()})}}}]),angular.module("ui.bootstrap.accordion",["ui.bootstrap.collapse"]).constant("uibAccordionConfig",{closeOthers:!0}).controller("UibAccordionController",["$scope","$attrs","uibAccordionConfig",function(a,b,c){this.groups=[],this.closeOthers=function(d){var e=angular.isDefined(b.closeOthers)?a.$eval(b.closeOthers):c.closeOthers;e&&angular.forEach(this.groups,function(a){a!==d&&(a.isOpen=!1)})},this.addGroup=function(a){var b=this;this.groups.push(a),a.$on("$destroy",function(c){b.removeGroup(a)})},this.removeGroup=function(a){var b=this.groups.indexOf(a);-1!==b&&this.groups.splice(b,1)}}]).directive("uibAccordion",function(){return{controller:"UibAccordionController",controllerAs:"accordion",transclude:!0,templateUrl:function(a,b){return b.templateUrl||"template/accordion/accordion.html"}}}).directive("uibAccordionGroup",function(){return{require:"^uibAccordion",transclude:!0,replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/accordion/accordion-group.html"},scope:{heading:"@",isOpen:"=?",isDisabled:"=?"},controller:function(){this.setHeading=function(a){this.heading=a}},link:function(a,b,c,d){d.addGroup(a),a.openClass=c.openClass||"panel-open",a.panelClass=c.panelClass,a.$watch("isOpen",function(c){b.toggleClass(a.openClass,!!c),c&&d.closeOthers(a)}),a.toggleOpen=function(b){a.isDisabled||b&&32!==b.which||(a.isOpen=!a.isOpen)}}}}).directive("uibAccordionHeading",function(){return{transclude:!0,template:"",replace:!0,require:"^uibAccordionGroup",link:function(a,b,c,d,e){d.setHeading(e(a,angular.noop))}}}).directive("uibAccordionTransclude",function(){return{require:["?^uibAccordionGroup","?^accordionGroup"],link:function(a,b,c,d){d=d[0]?d[0]:d[1],a.$watch(function(){return d[c.uibAccordionTransclude]},function(a){a&&(b.find("span").html(""),b.find("span").append(a))})}}}),angular.module("ui.bootstrap.accordion").value("$accordionSuppressWarning",!1).controller("AccordionController",["$scope","$attrs","$controller","$log","$accordionSuppressWarning",function(a,b,c,d,e){e||d.warn("AccordionController is now deprecated. Use UibAccordionController instead."),angular.extend(this,c("UibAccordionController",{$scope:a,$attrs:b}))}]).directive("accordion",["$log","$accordionSuppressWarning",function(a,b){return{restrict:"EA",controller:"AccordionController",controllerAs:"accordion",transclude:!0,replace:!1,templateUrl:function(a,b){return b.templateUrl||"template/accordion/accordion.html"},link:function(){b||a.warn("accordion is now deprecated. Use uib-accordion instead.")}}}]).directive("accordionGroup",["$log","$accordionSuppressWarning",function(a,b){return{require:"^accordion",restrict:"EA",transclude:!0,replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/accordion/accordion-group.html"},scope:{heading:"@",isOpen:"=?",isDisabled:"=?"},controller:function(){this.setHeading=function(a){this.heading=a}},link:function(c,d,e,f){b||a.warn("accordion-group is now deprecated. Use uib-accordion-group instead."),f.addGroup(c),c.openClass=e.openClass||"panel-open",c.panelClass=e.panelClass,c.$watch("isOpen",function(a){d.toggleClass(c.openClass,!!a),a&&f.closeOthers(c)}),c.toggleOpen=function(a){c.isDisabled||a&&32!==a.which||(c.isOpen=!c.isOpen)}}}}]).directive("accordionHeading",["$log","$accordionSuppressWarning",function(a,b){return{restrict:"EA",transclude:!0,template:"",replace:!0,require:"^accordionGroup",link:function(c,d,e,f,g){b||a.warn("accordion-heading is now deprecated. Use uib-accordion-heading instead."),f.setHeading(g(c,angular.noop))}}}]).directive("accordionTransclude",["$log","$accordionSuppressWarning",function(a,b){return{require:"^accordionGroup",link:function(c,d,e,f){b||a.warn("accordion-transclude is now deprecated. Use uib-accordion-transclude instead."),c.$watch(function(){return f[e.accordionTransclude]},function(a){a&&(d.find("span").html(""),d.find("span").append(a))})}}}]),angular.module("ui.bootstrap.alert",[]).controller("UibAlertController",["$scope","$attrs","$interpolate","$timeout",function(a,b,c,d){a.closeable=!!b.close;var e=angular.isDefined(b.dismissOnTimeout)?c(b.dismissOnTimeout)(a.$parent):null;e&&d(function(){a.close()},parseInt(e,10))}]).directive("uibAlert",function(){return{controller:"UibAlertController",controllerAs:"alert",templateUrl:function(a,b){return b.templateUrl||"template/alert/alert.html"},transclude:!0,replace:!0,scope:{type:"@",close:"&"}}}),angular.module("ui.bootstrap.alert").value("$alertSuppressWarning",!1).controller("AlertController",["$scope","$attrs","$controller","$log","$alertSuppressWarning",function(a,b,c,d,e){e||d.warn("AlertController is now deprecated. Use UibAlertController instead."),angular.extend(this,c("UibAlertController",{$scope:a,$attrs:b}))}]).directive("alert",["$log","$alertSuppressWarning",function(a,b){return{controller:"AlertController",controllerAs:"alert",templateUrl:function(a,b){return b.templateUrl||"template/alert/alert.html"},transclude:!0,replace:!0,scope:{type:"@",close:"&"},link:function(){b||a.warn("alert is now deprecated. Use uib-alert instead.")}}}]),angular.module("ui.bootstrap.buttons",[]).constant("uibButtonConfig",{activeClass:"active",toggleEvent:"click"}).controller("UibButtonsController",["uibButtonConfig",function(a){this.activeClass=a.activeClass||"active",this.toggleEvent=a.toggleEvent||"click"}]).directive("uibBtnRadio",function(){return{require:["uibBtnRadio","ngModel"],controller:"UibButtonsController",controllerAs:"buttons",link:function(a,b,c,d){var e=d[0],f=d[1];b.find("input").css({display:"none"}),f.$render=function(){b.toggleClass(e.activeClass,angular.equals(f.$modelValue,a.$eval(c.uibBtnRadio)))},b.on(e.toggleEvent,function(){if(!c.disabled){var d=b.hasClass(e.activeClass);(!d||angular.isDefined(c.uncheckable))&&a.$apply(function(){f.$setViewValue(d?null:a.$eval(c.uibBtnRadio)),f.$render()})}})}}}).directive("uibBtnCheckbox",function(){return{require:["uibBtnCheckbox","ngModel"],controller:"UibButtonsController",controllerAs:"button",link:function(a,b,c,d){function e(){return g(c.btnCheckboxTrue,!0)}function f(){return g(c.btnCheckboxFalse,!1)}function g(b,c){return angular.isDefined(b)?a.$eval(b):c}var h=d[0],i=d[1];b.find("input").css({display:"none"}),i.$render=function(){b.toggleClass(h.activeClass,angular.equals(i.$modelValue,e()))},b.on(h.toggleEvent,function(){c.disabled||a.$apply(function(){i.$setViewValue(b.hasClass(h.activeClass)?f():e()),i.$render()})})}}}),angular.module("ui.bootstrap.buttons").value("$buttonsSuppressWarning",!1).controller("ButtonsController",["$controller","$log","$buttonsSuppressWarning",function(a,b,c){c||b.warn("ButtonsController is now deprecated. Use UibButtonsController instead."),angular.extend(this,a("UibButtonsController"))}]).directive("btnRadio",["$log","$buttonsSuppressWarning",function(a,b){return{require:["btnRadio","ngModel"],controller:"ButtonsController",controllerAs:"buttons",link:function(c,d,e,f){b||a.warn("btn-radio is now deprecated. Use uib-btn-radio instead.");var g=f[0],h=f[1];d.find("input").css({display:"none"}),h.$render=function(){d.toggleClass(g.activeClass,angular.equals(h.$modelValue,c.$eval(e.btnRadio)))},d.bind(g.toggleEvent,function(){if(!e.disabled){var a=d.hasClass(g.activeClass);(!a||angular.isDefined(e.uncheckable))&&c.$apply(function(){h.$setViewValue(a?null:c.$eval(e.btnRadio)),h.$render()})}})}}}]).directive("btnCheckbox",["$document","$log","$buttonsSuppressWarning",function(a,b,c){return{require:["btnCheckbox","ngModel"],controller:"ButtonsController",controllerAs:"button",link:function(d,e,f,g){function h(){return j(f.btnCheckboxTrue,!0)}function i(){return j(f.btnCheckboxFalse,!1)}function j(a,b){var c=d.$eval(a);return angular.isDefined(c)?c:b}c||b.warn("btn-checkbox is now deprecated. Use uib-btn-checkbox instead.");var k=g[0],l=g[1];e.find("input").css({display:"none"}),l.$render=function(){e.toggleClass(k.activeClass,angular.equals(l.$modelValue,h()))},e.bind(k.toggleEvent,function(){f.disabled||d.$apply(function(){l.$setViewValue(e.hasClass(k.activeClass)?i():h()),l.$render()})}),e.on("keypress",function(b){f.disabled||32!==b.which||a[0].activeElement!==e[0]||d.$apply(function(){l.$setViewValue(e.hasClass(k.activeClass)?i():h()),l.$render()})})}}}]),angular.module("ui.bootstrap.carousel",[]).controller("UibCarouselController",["$scope","$element","$interval","$animate",function(a,b,c,d){function e(b,c,e){s||(angular.extend(b,{direction:e,active:!0}),angular.extend(m.currentSlide||{},{direction:e,active:!1}),d.enabled()&&!a.noTransition&&!a.$currentTransition&&b.$element&&m.slides.length>1&&(b.$element.data(q,b.direction),m.currentSlide&&m.currentSlide.$element&&m.currentSlide.$element.data(q,b.direction),a.$currentTransition=!0,o?d.on("addClass",b.$element,function(b,c){"close"===c&&(a.$currentTransition=null,d.off("addClass",b))}):b.$element.one("$animate:close",function(){a.$currentTransition=null})),m.currentSlide=b,r=c,g())}function f(a){if(angular.isUndefined(n[a].index))return n[a];var b;n.length;for(b=0;b<n.length;++b)if(n[b].index==a)return n[b]}function g(){h();var b=+a.interval;!isNaN(b)&&b>0&&(k=c(i,b))}function h(){k&&(c.cancel(k),k=null)}function i(){var b=+a.interval;l&&!isNaN(b)&&b>0&&n.length?a.next():a.pause()}function j(b){b.length||(a.$currentTransition=null)}var k,l,m=this,n=m.slides=a.slides=[],o=angular.version.minor>=4,p="uib-noTransition",q="uib-slideDirection",r=-1;m.currentSlide=null;var s=!1;m.select=a.select=function(b,c){var d=a.indexOfSlide(b);void 0===c&&(c=d>m.getCurrentIndex()?"next":"prev"),b&&b!==m.currentSlide&&!a.$currentTransition&&e(b,d,c)},a.$on("$destroy",function(){s=!0}),m.getCurrentIndex=function(){return m.currentSlide&&angular.isDefined(m.currentSlide.index)?+m.currentSlide.index:r},a.indexOfSlide=function(a){return angular.isDefined(a.index)?+a.index:n.indexOf(a)},a.next=function(){var b=(m.getCurrentIndex()+1)%n.length;return 0===b&&a.noWrap()?void a.pause():m.select(f(b),"next")},a.prev=function(){var b=m.getCurrentIndex()-1<0?n.length-1:m.getCurrentIndex()-1;return a.noWrap()&&b===n.length-1?void a.pause():m.select(f(b),"prev")},a.isActive=function(a){return m.currentSlide===a},a.$watch("interval",g),a.$watchCollection("slides",j),a.$on("$destroy",h),a.play=function(){l||(l=!0,g())},a.pause=function(){a.noPause||(l=!1,h())},m.addSlide=function(b,c){b.$element=c,n.push(b),1===n.length||b.active?(m.select(n[n.length-1]),1===n.length&&a.play()):b.active=!1},m.removeSlide=function(a){angular.isDefined(a.index)&&n.sort(function(a,b){return+a.index>+b.index});var b=n.indexOf(a);n.splice(b,1),n.length>0&&a.active?b>=n.length?m.select(n[b-1]):m.select(n[b]):r>b&&r--,0===n.length&&(m.currentSlide=null)},a.$watch("noTransition",function(a){b.data(p,a)})}]).directive("uibCarousel",[function(){return{transclude:!0,replace:!0,controller:"UibCarouselController",controllerAs:"carousel",require:"carousel",templateUrl:function(a,b){return b.templateUrl||"template/carousel/carousel.html"},scope:{interval:"=",noTransition:"=",noPause:"=",noWrap:"&"}}}]).directive("uibSlide",function(){return{require:"^uibCarousel",restrict:"EA",transclude:!0,replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/carousel/slide.html"},scope:{active:"=?",actual:"=?",index:"=?"},link:function(a,b,c,d){d.addSlide(a,b),a.$on("$destroy",function(){d.removeSlide(a)}),a.$watch("active",function(b){b&&d.select(a)})}}}).animation(".item",["$injector","$animate",function(a,b){function c(a,b,c){a.removeClass(b),c&&c()}var d="uib-noTransition",e="uib-slideDirection",f=null;return a.has("$animateCss")&&(f=a.get("$animateCss")),{beforeAddClass:function(a,g,h){if("active"==g&&a.parent()&&a.parent().parent()&&!a.parent().parent().data(d)){var i=!1,j=a.data(e),k="next"==j?"left":"right",l=c.bind(this,a,k+" "+j,h);return a.addClass(j),f?f(a,{addClass:k}).start().done(l):b.addClass(a,k).then(function(){i||l(),h()}),function(){i=!0}}h()},beforeRemoveClass:function(a,g,h){if("active"===g&&a.parent()&&a.parent().parent()&&!a.parent().parent().data(d)){var i=!1,j=a.data(e),k="next"==j?"left":"right",l=c.bind(this,a,k,h);return f?f(a,{addClass:k}).start().done(l):b.addClass(a,k).then(function(){i||l(),h()}),function(){i=!0}}h()}}}]),angular.module("ui.bootstrap.carousel").value("$carouselSuppressWarning",!1).controller("CarouselController",["$scope","$element","$controller","$log","$carouselSuppressWarning",function(a,b,c,d,e){e||d.warn("CarouselController is now deprecated. Use UibCarouselController instead."),angular.extend(this,c("UibCarouselController",{$scope:a,$element:b}))}]).directive("carousel",["$log","$carouselSuppressWarning",function(a,b){return{transclude:!0,replace:!0,controller:"CarouselController",controllerAs:"carousel",require:"carousel",templateUrl:function(a,b){return b.templateUrl||"template/carousel/carousel.html"},scope:{interval:"=",noTransition:"=",noPause:"=",noWrap:"&"},link:function(){b||a.warn("carousel is now deprecated. Use uib-carousel instead.")}}}]).directive("slide",["$log","$carouselSuppressWarning",function(a,b){return{require:"^carousel",transclude:!0,replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/carousel/slide.html"},scope:{active:"=?",actual:"=?",index:"=?"},link:function(c,d,e,f){b||a.warn("slide is now deprecated. Use uib-slide instead."),f.addSlide(c,d),c.$on("$destroy",function(){f.removeSlide(c)}),c.$watch("active",function(a){a&&f.select(c)})}}}]),angular.module("ui.bootstrap.dateparser",[]).service("uibDateParser",["$log","$locale","orderByFilter",function(a,b,c){function d(a){var b=[],d=a.split("");return angular.forEach(g,function(c,e){var f=a.indexOf(e);if(f>-1){a=a.split(""),d[f]="("+c.regex+")",a[f]="$";for(var g=f+1,h=f+e.length;h>g;g++)d[g]="",a[g]="$";a=a.join(""),b.push({index:f,apply:c.apply})}}),{regex:new RegExp("^"+d.join("")+"$"),map:c(b,"index")}}function e(a,b,c){return 1>c?!1:1===b&&c>28?29===c&&(a%4===0&&a%100!==0||a%400===0):3===b||5===b||8===b||10===b?31>c:!0}var f,g,h=/[\\\^\$\*\+\?\|\[\]\(\)\.\{\}]/g;this.init=function(){f=b.id,this.parsers={},g={yyyy:{regex:"\\d{4}",apply:function(a){this.year=+a}},yy:{regex:"\\d{2}",apply:function(a){this.year=+a+2e3}},y:{regex:"\\d{1,4}",apply:function(a){this.year=+a}},MMMM:{regex:b.DATETIME_FORMATS.MONTH.join("|"),apply:function(a){this.month=b.DATETIME_FORMATS.MONTH.indexOf(a)}},MMM:{regex:b.DATETIME_FORMATS.SHORTMONTH.join("|"),apply:function(a){this.month=b.DATETIME_FORMATS.SHORTMONTH.indexOf(a)}},MM:{regex:"0[1-9]|1[0-2]",apply:function(a){this.month=a-1}},M:{regex:"[1-9]|1[0-2]",apply:function(a){this.month=a-1}},dd:{regex:"[0-2][0-9]{1}|3[0-1]{1}",apply:function(a){this.date=+a}},d:{regex:"[1-2]?[0-9]{1}|3[0-1]{1}",apply:function(a){this.date=+a}},EEEE:{regex:b.DATETIME_FORMATS.DAY.join("|")},EEE:{regex:b.DATETIME_FORMATS.SHORTDAY.join("|")},HH:{regex:"(?:0|1)[0-9]|2[0-3]",apply:function(a){this.hours=+a}},hh:{regex:"0[0-9]|1[0-2]",apply:function(a){this.hours=+a}},H:{regex:"1?[0-9]|2[0-3]",apply:function(a){this.hours=+a}},h:{regex:"[0-9]|1[0-2]",apply:function(a){this.hours=+a}},mm:{regex:"[0-5][0-9]",apply:function(a){this.minutes=+a}},m:{regex:"[0-9]|[1-5][0-9]",apply:function(a){this.minutes=+a}},sss:{regex:"[0-9][0-9][0-9]",apply:function(a){this.milliseconds=+a}},ss:{regex:"[0-5][0-9]",apply:function(a){this.seconds=+a}},s:{regex:"[0-9]|[1-5][0-9]",apply:function(a){this.seconds=+a}},a:{regex:b.DATETIME_FORMATS.AMPMS.join("|"),apply:function(a){12===this.hours&&(this.hours=0),"PM"===a&&(this.hours+=12)}}}},this.init(),this.parse=function(c,g,i){if(!angular.isString(c)||!g)return c;g=b.DATETIME_FORMATS[g]||g,g=g.replace(h,"\\$&"),b.id!==f&&this.init(),this.parsers[g]||(this.parsers[g]=d(g));var j=this.parsers[g],k=j.regex,l=j.map,m=c.match(k);if(m&&m.length){var n,o;angular.isDate(i)&&!isNaN(i.getTime())?n={year:i.getFullYear(),month:i.getMonth(),date:i.getDate(),hours:i.getHours(),minutes:i.getMinutes(),seconds:i.getSeconds(),milliseconds:i.getMilliseconds()}:(i&&a.warn("dateparser:","baseDate is not a valid date"),n={year:1900,month:0,date:1,hours:0,minutes:0,seconds:0,milliseconds:0});for(var p=1,q=m.length;q>p;p++){var r=l[p-1];r.apply&&r.apply.call(n,m[p])}return e(n.year,n.month,n.date)&&(angular.isDate(i)&&!isNaN(i.getTime())?(o=new Date(i),o.setFullYear(n.year,n.month,n.date,n.hours,n.minutes,n.seconds,n.milliseconds||0)):o=new Date(n.year,n.month,n.date,n.hours,n.minutes,n.seconds,n.milliseconds||0)),o}}}]),angular.module("ui.bootstrap.dateparser").value("$dateParserSuppressWarning",!1).service("dateParser",["$log","$dateParserSuppressWarning","uibDateParser",function(a,b,c){b||a.warn("dateParser is now deprecated. Use uibDateParser instead."),angular.extend(this,c)}]),angular.module("ui.bootstrap.position",[]).factory("$uibPosition",["$document","$window",function(a,b){function c(a,c){return a.currentStyle?a.currentStyle[c]:b.getComputedStyle?b.getComputedStyle(a)[c]:a.style[c]}function d(a){return"static"===(c(a,"position")||"static")}var e=function(b){for(var c=a[0],e=b.offsetParent||c;e&&e!==c&&d(e);)e=e.offsetParent;return e||c};return{position:function(b){var c=this.offset(b),d={top:0,left:0},f=e(b[0]);f!=a[0]&&(d=this.offset(angular.element(f)),d.top+=f.clientTop-f.scrollTop,d.left+=f.clientLeft-f.scrollLeft);var g=b[0].getBoundingClientRect();return{width:g.width||b.prop("offsetWidth"),height:g.height||b.prop("offsetHeight"),top:c.top-d.top,left:c.left-d.left}},offset:function(c){var d=c[0].getBoundingClientRect();return{width:d.width||c.prop("offsetWidth"),height:d.height||c.prop("offsetHeight"),top:d.top+(b.pageYOffset||a[0].documentElement.scrollTop),left:d.left+(b.pageXOffset||a[0].documentElement.scrollLeft)}},positionElements:function(a,b,c,d){var e,f,g,h,i=c.split("-"),j=i[0],k=i[1]||"center";e=d?this.offset(a):this.position(a),f=b.prop("offsetWidth"),g=b.prop("offsetHeight");var l={center:function(){return e.left+e.width/2-f/2},left:function(){return e.left},right:function(){return e.left+e.width}},m={center:function(){return e.top+e.height/2-g/2},top:function(){return e.top},bottom:function(){return e.top+e.height}};switch(j){case"right":h={top:m[k](),left:l[j]()};break;case"left":h={top:m[k](),left:e.left-f};break;case"bottom":h={top:m[j](),left:l[k]()};break;default:h={top:e.top-g,left:l[k]()}}return h}}}]),angular.module("ui.bootstrap.position").value("$positionSuppressWarning",!1).service("$position",["$log","$positionSuppressWarning","$uibPosition",function(a,b,c){b||a.warn("$position is now deprecated. Use $uibPosition instead."),angular.extend(this,c)}]),angular.module("ui.bootstrap.datepicker",["ui.bootstrap.dateparser","ui.bootstrap.position"]).value("$datepickerSuppressError",!1).constant("uibDatepickerConfig",{formatDay:"dd",formatMonth:"MMMM",formatYear:"yyyy",formatDayHeader:"EEE",formatDayTitle:"MMMM yyyy",formatMonthTitle:"yyyy",datepickerMode:"day",minMode:"day",maxMode:"year",showWeeks:!0,startingDay:0,yearRange:20,minDate:null,maxDate:null,shortcutPropagation:!1}).controller("UibDatepickerController",["$scope","$attrs","$parse","$interpolate","$log","dateFilter","uibDatepickerConfig","$datepickerSuppressError",function(a,b,c,d,e,f,g,h){var i=this,j={$setViewValue:angular.noop};this.modes=["day","month","year"],angular.forEach(["formatDay","formatMonth","formatYear","formatDayHeader","formatDayTitle","formatMonthTitle","showWeeks","startingDay","yearRange","shortcutPropagation"],function(c,e){i[c]=angular.isDefined(b[c])?6>e?d(b[c])(a.$parent):a.$parent.$eval(b[c]):g[c]}),angular.forEach(["minDate","maxDate"],function(d){b[d]?a.$parent.$watch(c(b[d]),function(a){i[d]=a?new Date(a):null,i.refreshView()}):i[d]=g[d]?new Date(g[d]):null}),angular.forEach(["minMode","maxMode"],function(d){b[d]?a.$parent.$watch(c(b[d]),function(c){i[d]=angular.isDefined(c)?c:b[d],a[d]=i[d],("minMode"==d&&i.modes.indexOf(a.datepickerMode)<i.modes.indexOf(i[d])||"maxMode"==d&&i.modes.indexOf(a.datepickerMode)>i.modes.indexOf(i[d]))&&(a.datepickerMode=i[d])}):(i[d]=g[d]||null,a[d]=i[d])}),a.datepickerMode=a.datepickerMode||g.datepickerMode,a.uniqueId="datepicker-"+a.$id+"-"+Math.floor(1e4*Math.random()),angular.isDefined(b.initDate)?(this.activeDate=a.$parent.$eval(b.initDate)||new Date,a.$parent.$watch(b.initDate,function(a){a&&(j.$isEmpty(j.$modelValue)||j.$invalid)&&(i.activeDate=a,i.refreshView())})):this.activeDate=new Date,a.isActive=function(b){return 0===i.compare(b.date,i.activeDate)?(a.activeDateId=b.uid,!0):!1},this.init=function(a){j=a,j.$render=function(){i.render()}},this.render=function(){if(j.$viewValue){var a=new Date(j.$viewValue),b=!isNaN(a);b?this.activeDate=a:h||e.error('Datepicker directive: "ng-model" value must be a Date object, a number of milliseconds since 01.01.1970 or a string representing an RFC2822 or ISO 8601 date.')}this.refreshView()},this.refreshView=function(){if(this.element){this._refreshView();var a=j.$viewValue?new Date(j.$viewValue):null;j.$setValidity("dateDisabled",!a||this.element&&!this.isDisabled(a))}},this.createDateObject=function(a,b){var c=j.$viewValue?new Date(j.$viewValue):null;return{date:a,label:f(a,b),selected:c&&0===this.compare(a,c),disabled:this.isDisabled(a),current:0===this.compare(a,new Date),customClass:this.customClass(a)}},this.isDisabled=function(c){return this.minDate&&this.compare(c,this.minDate)<0||this.maxDate&&this.compare(c,this.maxDate)>0||b.dateDisabled&&a.dateDisabled({date:c,mode:a.datepickerMode})},this.customClass=function(b){return a.customClass({date:b,mode:a.datepickerMode})},this.split=function(a,b){for(var c=[];a.length>0;)c.push(a.splice(0,b));return c},a.select=function(b){if(a.datepickerMode===i.minMode){var c=j.$viewValue?new Date(j.$viewValue):new Date(0,0,0,0,0,0,0);c.setFullYear(b.getFullYear(),b.getMonth(),b.getDate()),j.$setViewValue(c),j.$render()}else i.activeDate=b,a.datepickerMode=i.modes[i.modes.indexOf(a.datepickerMode)-1]},a.move=function(a){var b=i.activeDate.getFullYear()+a*(i.step.years||0),c=i.activeDate.getMonth()+a*(i.step.months||0);i.activeDate.setFullYear(b,c,1),i.refreshView()},a.toggleMode=function(b){b=b||1,a.datepickerMode===i.maxMode&&1===b||a.datepickerMode===i.minMode&&-1===b||(a.datepickerMode=i.modes[i.modes.indexOf(a.datepickerMode)+b])},a.keys={13:"enter",32:"space",33:"pageup",34:"pagedown",35:"end",36:"home",37:"left",38:"up",39:"right",40:"down"};var k=function(){i.element[0].focus()};a.$on("uib:datepicker.focus",k),a.keydown=function(b){var c=a.keys[b.which];if(c&&!b.shiftKey&&!b.altKey)if(b.preventDefault(),i.shortcutPropagation||b.stopPropagation(),"enter"===c||"space"===c){if(i.isDisabled(i.activeDate))return;a.select(i.activeDate)}else!b.ctrlKey||"up"!==c&&"down"!==c?(i.handleKeyDown(c,b),i.refreshView()):a.toggleMode("up"===c?1:-1)}}]).controller("UibDaypickerController",["$scope","$element","dateFilter",function(a,b,c){function d(a,b){return 1!==b||a%4!==0||a%100===0&&a%400!==0?f[b]:29}function e(a){var b=new Date(a);b.setDate(b.getDate()+4-(b.getDay()||7));var c=b.getTime();return b.setMonth(0),b.setDate(1),Math.floor(Math.round((c-b)/864e5)/7)+1}var f=[31,28,31,30,31,30,31,31,30,31,30,31];this.step={months:1},this.element=b,this.init=function(b){angular.extend(b,this),a.showWeeks=b.showWeeks,b.refreshView()},this.getDates=function(a,b){for(var c,d=new Array(b),e=new Date(a),f=0;b>f;)c=new Date(e),d[f++]=c,e.setDate(e.getDate()+1);return d},this._refreshView=function(){var b=this.activeDate.getFullYear(),d=this.activeDate.getMonth(),f=new Date(this.activeDate);f.setFullYear(b,d,1);var g=this.startingDay-f.getDay(),h=g>0?7-g:-g,i=new Date(f);h>0&&i.setDate(-h+1);for(var j=this.getDates(i,42),k=0;42>k;k++)j[k]=angular.extend(this.createDateObject(j[k],this.formatDay),{secondary:j[k].getMonth()!==d,uid:a.uniqueId+"-"+k});a.labels=new Array(7);for(var l=0;7>l;l++)a.labels[l]={abbr:c(j[l].date,this.formatDayHeader),full:c(j[l].date,"EEEE")};if(a.title=c(this.activeDate,this.formatDayTitle),a.rows=this.split(j,7),a.showWeeks){a.weekNumbers=[];for(var m=(11-this.startingDay)%7,n=a.rows.length,o=0;n>o;o++)a.weekNumbers.push(e(a.rows[o][m].date))}},this.compare=function(a,b){return new Date(a.getFullYear(),a.getMonth(),a.getDate())-new Date(b.getFullYear(),b.getMonth(),b.getDate())},this.handleKeyDown=function(a,b){var c=this.activeDate.getDate();if("left"===a)c-=1;else if("up"===a)c-=7;else if("right"===a)c+=1;else if("down"===a)c+=7;else if("pageup"===a||"pagedown"===a){var e=this.activeDate.getMonth()+("pageup"===a?-1:1);this.activeDate.setMonth(e,1),c=Math.min(d(this.activeDate.getFullYear(),this.activeDate.getMonth()),c)}else"home"===a?c=1:"end"===a&&(c=d(this.activeDate.getFullYear(),this.activeDate.getMonth()));this.activeDate.setDate(c)}}]).controller("UibMonthpickerController",["$scope","$element","dateFilter",function(a,b,c){this.step={years:1},this.element=b,this.init=function(a){angular.extend(a,this),a.refreshView()},this._refreshView=function(){for(var b,d=new Array(12),e=this.activeDate.getFullYear(),f=0;12>f;f++)b=new Date(this.activeDate),b.setFullYear(e,f,1),d[f]=angular.extend(this.createDateObject(b,this.formatMonth),{uid:a.uniqueId+"-"+f});a.title=c(this.activeDate,this.formatMonthTitle),a.rows=this.split(d,3)},this.compare=function(a,b){return new Date(a.getFullYear(),a.getMonth())-new Date(b.getFullYear(),b.getMonth())},this.handleKeyDown=function(a,b){var c=this.activeDate.getMonth();if("left"===a)c-=1;else if("up"===a)c-=3;else if("right"===a)c+=1;else if("down"===a)c+=3;else if("pageup"===a||"pagedown"===a){var d=this.activeDate.getFullYear()+("pageup"===a?-1:1);this.activeDate.setFullYear(d)}else"home"===a?c=0:"end"===a&&(c=11);this.activeDate.setMonth(c)}}]).controller("UibYearpickerController",["$scope","$element","dateFilter",function(a,b,c){function d(a){return parseInt((a-1)/e,10)*e+1}var e;this.element=b,this.yearpickerInit=function(){e=this.yearRange,this.step={years:e}},this._refreshView=function(){for(var b,c=new Array(e),f=0,g=d(this.activeDate.getFullYear());e>f;f++)b=new Date(this.activeDate),b.setFullYear(g+f,0,1),c[f]=angular.extend(this.createDateObject(b,this.formatYear),{uid:a.uniqueId+"-"+f});a.title=[c[0].label,c[e-1].label].join(" - "),a.rows=this.split(c,5)},this.compare=function(a,b){return a.getFullYear()-b.getFullYear()},this.handleKeyDown=function(a,b){var c=this.activeDate.getFullYear();"left"===a?c-=1:"up"===a?c-=5:"right"===a?c+=1:"down"===a?c+=5:"pageup"===a||"pagedown"===a?c+=("pageup"===a?-1:1)*this.step.years:"home"===a?c=d(this.activeDate.getFullYear()):"end"===a&&(c=d(this.activeDate.getFullYear())+e-1),this.activeDate.setFullYear(c)}}]).directive("uibDatepicker",function(){return{replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/datepicker.html"},scope:{datepickerMode:"=?",dateDisabled:"&",customClass:"&",shortcutPropagation:"&?"},require:["uibDatepicker","^ngModel"],controller:"UibDatepickerController",controllerAs:"datepicker",link:function(a,b,c,d){var e=d[0],f=d[1];e.init(f)}}}).directive("uibDaypicker",function(){return{replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/day.html"},require:["^?uibDatepicker","uibDaypicker","^?datepicker"],controller:"UibDaypickerController",link:function(a,b,c,d){var e=d[0]||d[2],f=d[1];f.init(e)}}}).directive("uibMonthpicker",function(){return{replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/month.html"},require:["^?uibDatepicker","uibMonthpicker","^?datepicker"],controller:"UibMonthpickerController",link:function(a,b,c,d){var e=d[0]||d[2],f=d[1];f.init(e)}}}).directive("uibYearpicker",function(){return{replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/year.html"},require:["^?uibDatepicker","uibYearpicker","^?datepicker"],controller:"UibYearpickerController",link:function(a,b,c,d){var e=d[0]||d[2];angular.extend(e,d[1]),e.yearpickerInit(),e.refreshView()}}}).constant("uibDatepickerPopupConfig",{datepickerPopup:"yyyy-MM-dd",datepickerPopupTemplateUrl:"template/datepicker/popup.html",datepickerTemplateUrl:"template/datepicker/datepicker.html",html5Types:{date:"yyyy-MM-dd","datetime-local":"yyyy-MM-ddTHH:mm:ss.sss",month:"yyyy-MM"},currentText:"Today",clearText:"Clear",closeText:"Done",closeOnDateSelection:!0,appendToBody:!1,showButtonBar:!0,onOpenFocus:!0}).controller("UibDatepickerPopupController",["$scope","$element","$attrs","$compile","$parse","$document","$rootScope","$uibPosition","dateFilter","uibDateParser","uibDatepickerPopupConfig","$timeout",function(a,b,c,d,e,f,g,h,i,j,k,l){
+  function m(a){return a.replace(/([A-Z])/g,function(a){return"-"+a.toLowerCase()})}function n(b){if(angular.isNumber(b)&&(b=new Date(b)),b){if(angular.isDate(b)&&!isNaN(b))return b;if(angular.isString(b)){var c=j.parse(b,r,a.date);return isNaN(c)?void 0:c}return void 0}return null}function o(a,b){var d=a||b;if(!c.ngRequired&&!d)return!0;if(angular.isNumber(d)&&(d=new Date(d)),d){if(angular.isDate(d)&&!isNaN(d))return!0;if(angular.isString(d)){var e=j.parse(d,r);return!isNaN(e)}return!1}return!0}function p(c){var d=A[0],e=b[0].contains(c.target),f=void 0!==d.contains&&d.contains(c.target);!a.isOpen||e||f||a.$apply(function(){a.isOpen=!1})}function q(c){27===c.which&&a.isOpen?(c.preventDefault(),c.stopPropagation(),a.$apply(function(){a.isOpen=!1}),b[0].focus()):40!==c.which||a.isOpen||(c.preventDefault(),c.stopPropagation(),a.$apply(function(){a.isOpen=!0}))}var r,s,t,u,v,w,x,y,z,A,B={},C=!1;a.watchData={},this.init=function(h){if(z=h,s=angular.isDefined(c.closeOnDateSelection)?a.$parent.$eval(c.closeOnDateSelection):k.closeOnDateSelection,t=angular.isDefined(c.datepickerAppendToBody)?a.$parent.$eval(c.datepickerAppendToBody):k.appendToBody,u=angular.isDefined(c.onOpenFocus)?a.$parent.$eval(c.onOpenFocus):k.onOpenFocus,v=angular.isDefined(c.datepickerPopupTemplateUrl)?c.datepickerPopupTemplateUrl:k.datepickerPopupTemplateUrl,w=angular.isDefined(c.datepickerTemplateUrl)?c.datepickerTemplateUrl:k.datepickerTemplateUrl,a.showButtonBar=angular.isDefined(c.showButtonBar)?a.$parent.$eval(c.showButtonBar):k.showButtonBar,k.html5Types[c.type]?(r=k.html5Types[c.type],C=!0):(r=c.datepickerPopup||c.uibDatepickerPopup||k.datepickerPopup,c.$observe("uibDatepickerPopup",function(a,b){var c=a||k.datepickerPopup;if(c!==r&&(r=c,z.$modelValue=null,!r))throw new Error("uibDatepickerPopup must have a date format specified.")})),!r)throw new Error("uibDatepickerPopup must have a date format specified.");if(C&&c.datepickerPopup)throw new Error("HTML5 date input types do not support custom formats.");if(x=angular.element("<div uib-datepicker-popup-wrap><div uib-datepicker></div></div>"),x.attr({"ng-model":"date","ng-change":"dateSelection(date)","template-url":v}),y=angular.element(x.children()[0]),y.attr("template-url",w),C&&"month"===c.type&&(y.attr("datepicker-mode",'"month"'),y.attr("min-mode","month")),c.datepickerOptions){var l=a.$parent.$eval(c.datepickerOptions);l&&l.initDate&&(a.initDate=l.initDate,y.attr("init-date","initDate"),delete l.initDate),angular.forEach(l,function(a,b){y.attr(m(b),a)})}angular.forEach(["minMode","maxMode","minDate","maxDate","datepickerMode","initDate","shortcutPropagation"],function(b){if(c[b]){var d=e(c[b]);if(a.$parent.$watch(d,function(c){a.watchData[b]=c,("minDate"===b||"maxDate"===b)&&(B[b]=new Date(c))}),y.attr(m(b),"watchData."+b),"datepickerMode"===b){var f=d.assign;a.$watch("watchData."+b,function(b,c){angular.isFunction(f)&&b!==c&&f(a.$parent,b)})}}}),c.dateDisabled&&y.attr("date-disabled","dateDisabled({ date: date, mode: mode })"),c.showWeeks&&y.attr("show-weeks",c.showWeeks),c.customClass&&y.attr("custom-class","customClass({ date: date, mode: mode })"),C?z.$formatters.push(function(b){return a.date=b,b}):(z.$$parserName="date",z.$validators.date=o,z.$parsers.unshift(n),z.$formatters.push(function(b){return a.date=b,z.$isEmpty(b)?b:i(b,r)})),z.$viewChangeListeners.push(function(){a.date=j.parse(z.$viewValue,r,a.date)}),b.bind("keydown",q),A=d(x)(a),x.remove(),t?f.find("body").append(A):b.after(A),a.$on("$destroy",function(){a.isOpen===!0&&(g.$$phase||a.$apply(function(){a.isOpen=!1})),A.remove(),b.unbind("keydown",q),f.unbind("click",p)})},a.getText=function(b){return a[b+"Text"]||k[b+"Text"]},a.isDisabled=function(b){return"today"===b&&(b=new Date),a.watchData.minDate&&a.compare(b,B.minDate)<0||a.watchData.maxDate&&a.compare(b,B.maxDate)>0},a.compare=function(a,b){return new Date(a.getFullYear(),a.getMonth(),a.getDate())-new Date(b.getFullYear(),b.getMonth(),b.getDate())},a.dateSelection=function(c){angular.isDefined(c)&&(a.date=c);var d=a.date?i(a.date,r):null;b.val(d),z.$setViewValue(d),s&&(a.isOpen=!1,b[0].focus())},a.keydown=function(c){27===c.which&&(a.isOpen=!1,b[0].focus())},a.select=function(b){if("today"===b){var c=new Date;angular.isDate(a.date)?(b=new Date(a.date),b.setFullYear(c.getFullYear(),c.getMonth(),c.getDate())):b=new Date(c.setHours(0,0,0,0))}a.dateSelection(b)},a.close=function(){a.isOpen=!1,b[0].focus()},a.$watch("isOpen",function(c){c?(a.position=t?h.offset(b):h.position(b),a.position.top=a.position.top+b.prop("offsetHeight"),l(function(){u&&a.$broadcast("uib:datepicker.focus"),f.bind("click",p)},0,!1)):f.unbind("click",p)})}]).directive("uibDatepickerPopup",function(){return{require:["ngModel","uibDatepickerPopup"],controller:"UibDatepickerPopupController",scope:{isOpen:"=?",currentText:"@",clearText:"@",closeText:"@",dateDisabled:"&",customClass:"&"},link:function(a,b,c,d){var e=d[0],f=d[1];f.init(e)}}}).directive("uibDatepickerPopupWrap",function(){return{replace:!0,transclude:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/popup.html"}}}),angular.module("ui.bootstrap.datepicker").value("$datepickerSuppressWarning",!1).controller("DatepickerController",["$scope","$attrs","$parse","$interpolate","$log","dateFilter","uibDatepickerConfig","$datepickerSuppressError","$datepickerSuppressWarning",function(a,b,c,d,e,f,g,h,i){i||e.warn("DatepickerController is now deprecated. Use UibDatepickerController instead.");var j=this,k={$setViewValue:angular.noop};this.modes=["day","month","year"],angular.forEach(["formatDay","formatMonth","formatYear","formatDayHeader","formatDayTitle","formatMonthTitle","showWeeks","startingDay","yearRange","shortcutPropagation"],function(c,e){j[c]=angular.isDefined(b[c])?6>e?d(b[c])(a.$parent):a.$parent.$eval(b[c]):g[c]}),angular.forEach(["minDate","maxDate"],function(d){b[d]?a.$parent.$watch(c(b[d]),function(a){j[d]=a?new Date(a):null,j.refreshView()}):j[d]=g[d]?new Date(g[d]):null}),angular.forEach(["minMode","maxMode"],function(d){b[d]?a.$parent.$watch(c(b[d]),function(c){j[d]=angular.isDefined(c)?c:b[d],a[d]=j[d],("minMode"==d&&j.modes.indexOf(a.datepickerMode)<j.modes.indexOf(j[d])||"maxMode"==d&&j.modes.indexOf(a.datepickerMode)>j.modes.indexOf(j[d]))&&(a.datepickerMode=j[d])}):(j[d]=g[d]||null,a[d]=j[d])}),a.datepickerMode=a.datepickerMode||g.datepickerMode,a.uniqueId="datepicker-"+a.$id+"-"+Math.floor(1e4*Math.random()),angular.isDefined(b.initDate)?(this.activeDate=a.$parent.$eval(b.initDate)||new Date,a.$parent.$watch(b.initDate,function(a){a&&(k.$isEmpty(k.$modelValue)||k.$invalid)&&(j.activeDate=a,j.refreshView())})):this.activeDate=new Date,a.isActive=function(b){return 0===j.compare(b.date,j.activeDate)?(a.activeDateId=b.uid,!0):!1},this.init=function(a){k=a,k.$render=function(){j.render()}},this.render=function(){if(k.$viewValue){var a=new Date(k.$viewValue),b=!isNaN(a);b?this.activeDate=a:h||e.error('Datepicker directive: "ng-model" value must be a Date object, a number of milliseconds since 01.01.1970 or a string representing an RFC2822 or ISO 8601 date.')}this.refreshView()},this.refreshView=function(){if(this.element){this._refreshView();var a=k.$viewValue?new Date(k.$viewValue):null;k.$setValidity("dateDisabled",!a||this.element&&!this.isDisabled(a))}},this.createDateObject=function(a,b){var c=k.$viewValue?new Date(k.$viewValue):null;return{date:a,label:f(a,b),selected:c&&0===this.compare(a,c),disabled:this.isDisabled(a),current:0===this.compare(a,new Date),customClass:this.customClass(a)}},this.isDisabled=function(c){return this.minDate&&this.compare(c,this.minDate)<0||this.maxDate&&this.compare(c,this.maxDate)>0||b.dateDisabled&&a.dateDisabled({date:c,mode:a.datepickerMode})},this.customClass=function(b){return a.customClass({date:b,mode:a.datepickerMode})},this.split=function(a,b){for(var c=[];a.length>0;)c.push(a.splice(0,b));return c},this.fixTimeZone=function(a){var b=a.getHours();a.setHours(23===b?b+2:0)},a.select=function(b){if(a.datepickerMode===j.minMode){var c=k.$viewValue?new Date(k.$viewValue):new Date(0,0,0,0,0,0,0);c.setFullYear(b.getFullYear(),b.getMonth(),b.getDate()),k.$setViewValue(c),k.$render()}else j.activeDate=b,a.datepickerMode=j.modes[j.modes.indexOf(a.datepickerMode)-1]},a.move=function(a){var b=j.activeDate.getFullYear()+a*(j.step.years||0),c=j.activeDate.getMonth()+a*(j.step.months||0);j.activeDate.setFullYear(b,c,1),j.refreshView()},a.toggleMode=function(b){b=b||1,a.datepickerMode===j.maxMode&&1===b||a.datepickerMode===j.minMode&&-1===b||(a.datepickerMode=j.modes[j.modes.indexOf(a.datepickerMode)+b])},a.keys={13:"enter",32:"space",33:"pageup",34:"pagedown",35:"end",36:"home",37:"left",38:"up",39:"right",40:"down"};var l=function(){j.element[0].focus()};a.$on("uib:datepicker.focus",l),a.keydown=function(b){var c=a.keys[b.which];if(c&&!b.shiftKey&&!b.altKey)if(b.preventDefault(),j.shortcutPropagation||b.stopPropagation(),"enter"===c||"space"===c){if(j.isDisabled(j.activeDate))return;a.select(j.activeDate)}else!b.ctrlKey||"up"!==c&&"down"!==c?(j.handleKeyDown(c,b),j.refreshView()):a.toggleMode("up"===c?1:-1)}}]).directive("datepicker",["$log","$datepickerSuppressWarning",function(a,b){return{replace:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/datepicker.html"},scope:{datepickerMode:"=?",dateDisabled:"&",customClass:"&",shortcutPropagation:"&?"},require:["datepicker","^ngModel"],controller:"DatepickerController",controllerAs:"datepicker",link:function(c,d,e,f){b||a.warn("datepicker is now deprecated. Use uib-datepicker instead.");var g=f[0],h=f[1];g.init(h)}}}]).directive("daypicker",["$log","$datepickerSuppressWarning",function(a,b){return{replace:!0,templateUrl:"template/datepicker/day.html",require:["^datepicker","daypicker"],controller:"UibDaypickerController",link:function(c,d,e,f){b||a.warn("daypicker is now deprecated. Use uib-daypicker instead.");var g=f[0],h=f[1];h.init(g)}}}]).directive("monthpicker",["$log","$datepickerSuppressWarning",function(a,b){return{replace:!0,templateUrl:"template/datepicker/month.html",require:["^datepicker","monthpicker"],controller:"UibMonthpickerController",link:function(c,d,e,f){b||a.warn("monthpicker is now deprecated. Use uib-monthpicker instead.");var g=f[0],h=f[1];h.init(g)}}}]).directive("yearpicker",["$log","$datepickerSuppressWarning",function(a,b){return{replace:!0,templateUrl:"template/datepicker/year.html",require:["^datepicker","yearpicker"],controller:"UibYearpickerController",link:function(c,d,e,f){b||a.warn("yearpicker is now deprecated. Use uib-yearpicker instead.");var g=f[0];angular.extend(g,f[1]),g.yearpickerInit(),g.refreshView()}}}]).directive("datepickerPopup",["$log","$datepickerSuppressWarning",function(a,b){return{require:["ngModel","datepickerPopup"],controller:"UibDatepickerPopupController",scope:{isOpen:"=?",currentText:"@",clearText:"@",closeText:"@",dateDisabled:"&",customClass:"&"},link:function(c,d,e,f){b||a.warn("datepicker-popup is now deprecated. Use uib-datepicker-popup instead.");var g=f[0],h=f[1];h.init(g)}}}]).directive("datepickerPopupWrap",["$log","$datepickerSuppressWarning",function(a,b){return{replace:!0,transclude:!0,templateUrl:function(a,b){return b.templateUrl||"template/datepicker/popup.html"},link:function(){b||a.warn("datepicker-popup-wrap is now deprecated. Use uib-datepicker-popup-wrap instead.")}}}]),angular.module("ui.bootstrap.dropdown",["ui.bootstrap.position"]).constant("uibDropdownConfig",{openClass:"open"}).service("uibDropdownService",["$document","$rootScope",function(a,b){var c=null;this.open=function(b){c||(a.bind("click",d),a.bind("keydown",e)),c&&c!==b&&(c.isOpen=!1),c=b},this.close=function(b){c===b&&(c=null,a.unbind("click",d),a.unbind("keydown",e))};var d=function(a){if(c&&(!a||"disabled"!==c.getAutoClose())){var d=c.getToggleElement();if(!(a&&d&&d[0].contains(a.target))){var e=c.getDropdownElement();a&&"outsideClick"===c.getAutoClose()&&e&&e[0].contains(a.target)||(c.isOpen=!1,b.$$phase||c.$apply())}}},e=function(a){27===a.which?(c.focusToggleElement(),d()):c.isKeynavEnabled()&&/(38|40)/.test(a.which)&&c.isOpen&&(a.preventDefault(),a.stopPropagation(),c.focusDropdownEntry(a.which))}}]).controller("UibDropdownController",["$scope","$element","$attrs","$parse","uibDropdownConfig","uibDropdownService","$animate","$uibPosition","$document","$compile","$templateRequest",function(a,b,c,d,e,f,g,h,i,j,k){var l,m,n=this,o=a.$new(),p=e.openClass,q=angular.noop,r=c.onToggle?d(c.onToggle):angular.noop,s=!1,t=!1;b.addClass("dropdown"),this.init=function(){c.isOpen&&(m=d(c.isOpen),q=m.assign,a.$watch(m,function(a){o.isOpen=!!a})),s=angular.isDefined(c.dropdownAppendToBody),t=angular.isDefined(c.uibKeyboardNav),s&&n.dropdownMenu&&(i.find("body").append(n.dropdownMenu),b.on("$destroy",function(){n.dropdownMenu.remove()}))},this.toggle=function(a){return o.isOpen=arguments.length?!!a:!o.isOpen},this.isOpen=function(){return o.isOpen},o.getToggleElement=function(){return n.toggleElement},o.getAutoClose=function(){return c.autoClose||"always"},o.getElement=function(){return b},o.isKeynavEnabled=function(){return t},o.focusDropdownEntry=function(a){var c=n.dropdownMenu?angular.element(n.dropdownMenu).find("a"):angular.element(b).find("ul").eq(0).find("a");switch(a){case 40:angular.isNumber(n.selectedOption)?n.selectedOption=n.selectedOption===c.length-1?n.selectedOption:n.selectedOption+1:n.selectedOption=0;break;case 38:angular.isNumber(n.selectedOption)?n.selectedOption=0===n.selectedOption?0:n.selectedOption-1:n.selectedOption=c.length-1}c[n.selectedOption].focus()},o.getDropdownElement=function(){return n.dropdownMenu},o.focusToggleElement=function(){n.toggleElement&&n.toggleElement[0].focus()},o.$watch("isOpen",function(c,d){if(s&&n.dropdownMenu){var e=h.positionElements(b,n.dropdownMenu,"bottom-left",!0),i={top:e.top+"px",display:c?"block":"none"},m=n.dropdownMenu.hasClass("dropdown-menu-right");m?(i.left="auto",i.right=window.innerWidth-(e.left+b.prop("offsetWidth"))+"px"):(i.left=e.left+"px",i.right="auto"),n.dropdownMenu.css(i)}if(g[c?"addClass":"removeClass"](b,p).then(function(){angular.isDefined(c)&&c!==d&&r(a,{open:!!c})}),c)n.dropdownMenuTemplateUrl&&k(n.dropdownMenuTemplateUrl).then(function(a){l=o.$new(),j(a.trim())(l,function(a){var b=a;n.dropdownMenu.replaceWith(b),n.dropdownMenu=b})}),o.focusToggleElement(),f.open(o);else{if(n.dropdownMenuTemplateUrl){l&&l.$destroy();var t=angular.element('<ul class="dropdown-menu"></ul>');n.dropdownMenu.replaceWith(t),n.dropdownMenu=t}f.close(o),n.selectedOption=null}angular.isFunction(q)&&q(a,c)}),a.$on("$locationChangeSuccess",function(){"disabled"!==o.getAutoClose()&&(o.isOpen=!1)});var u=a.$on("$destroy",function(){o.$destroy()});o.$on("$destroy",u)}]).directive("uibDropdown",function(){return{controller:"UibDropdownController",link:function(a,b,c,d){d.init()}}}).directive("uibDropdownMenu",function(){return{restrict:"AC",require:"?^uibDropdown",link:function(a,b,c,d){if(d&&!angular.isDefined(c.dropdownNested)){b.addClass("dropdown-menu");var e=c.templateUrl;e&&(d.dropdownMenuTemplateUrl=e),d.dropdownMenu||(d.dropdownMenu=b)}}}}).directive("uibKeyboardNav",function(){return{restrict:"A",require:"?^uibDropdown",link:function(a,b,c,d){b.bind("keydown",function(a){if(-1!==[38,40].indexOf(a.which)){a.preventDefault(),a.stopPropagation();var b=d.dropdownMenu.find("a");switch(a.which){case 40:angular.isNumber(d.selectedOption)?d.selectedOption=d.selectedOption===b.length-1?d.selectedOption:d.selectedOption+1:d.selectedOption=0;break;case 38:angular.isNumber(d.selectedOption)?d.selectedOption=0===d.selectedOption?0:d.selectedOption-1:d.selectedOption=b.length-1}b[d.selectedOption].focus()}})}}}).directive("uibDropdownToggle",function(){return{require:"?^uibDropdown",link:function(a,b,c,d){if(d){b.addClass("dropdown-toggle"),d.toggleElement=b;var e=function(e){e.preventDefault(),b.hasClass("disabled")||c.disabled||a.$apply(function(){d.toggle()})};b.bind("click",e),b.attr({"aria-haspopup":!0,"aria-expanded":!1}),a.$watch(d.isOpen,function(a){b.attr("aria-expanded",!!a)}),a.$on("$destroy",function(){b.unbind("click",e)})}}}}),angular.module("ui.bootstrap.dropdown").value("$dropdownSuppressWarning",!1).service("dropdownService",["$log","$dropdownSuppressWarning","uibDropdownService",function(a,b,c){b||a.warn("dropdownService is now deprecated. Use uibDropdownService instead."),angular.extend(this,c)}]).controller("DropdownController",["$scope","$element","$attrs","$parse","uibDropdownConfig","uibDropdownService","$animate","$uibPosition","$document","$compile","$templateRequest","$log","$dropdownSuppressWarning",function(a,b,c,d,e,f,g,h,i,j,k,l,m){m||l.warn("DropdownController is now deprecated. Use UibDropdownController instead.");var n,o,p=this,q=a.$new(),r=e.openClass,s=angular.noop,t=c.onToggle?d(c.onToggle):angular.noop,u=!1,v=!1;b.addClass("dropdown"),this.init=function(){c.isOpen&&(o=d(c.isOpen),s=o.assign,a.$watch(o,function(a){q.isOpen=!!a})),u=angular.isDefined(c.dropdownAppendToBody),v=angular.isDefined(c.uibKeyboardNav),u&&p.dropdownMenu&&(i.find("body").append(p.dropdownMenu),b.on("$destroy",function(){p.dropdownMenu.remove()}))},this.toggle=function(a){return q.isOpen=arguments.length?!!a:!q.isOpen},this.isOpen=function(){return q.isOpen},q.getToggleElement=function(){return p.toggleElement},q.getAutoClose=function(){return c.autoClose||"always"},q.getElement=function(){return b},q.isKeynavEnabled=function(){return v},q.focusDropdownEntry=function(a){var c=p.dropdownMenu?angular.element(p.dropdownMenu).find("a"):angular.element(b).find("ul").eq(0).find("a");switch(a){case 40:angular.isNumber(p.selectedOption)?p.selectedOption=p.selectedOption===c.length-1?p.selectedOption:p.selectedOption+1:p.selectedOption=0;break;case 38:angular.isNumber(p.selectedOption)?p.selectedOption=0===p.selectedOption?0:p.selectedOption-1:p.selectedOption=c.length-1}c[p.selectedOption].focus()},q.getDropdownElement=function(){return p.dropdownMenu},q.focusToggleElement=function(){p.toggleElement&&p.toggleElement[0].focus()},q.$watch("isOpen",function(c,d){if(u&&p.dropdownMenu){var e=h.positionElements(b,p.dropdownMenu,"bottom-left",!0),i={top:e.top+"px",display:c?"block":"none"},l=p.dropdownMenu.hasClass("dropdown-menu-right");l?(i.left="auto",i.right=window.innerWidth-(e.left+b.prop("offsetWidth"))+"px"):(i.left=e.left+"px",i.right="auto"),p.dropdownMenu.css(i)}if(g[c?"addClass":"removeClass"](b,r).then(function(){angular.isDefined(c)&&c!==d&&t(a,{open:!!c})}),c)p.dropdownMenuTemplateUrl&&k(p.dropdownMenuTemplateUrl).then(function(a){n=q.$new(),j(a.trim())(n,function(a){var b=a;p.dropdownMenu.replaceWith(b),p.dropdownMenu=b})}),q.focusToggleElement(),f.open(q);else{if(p.dropdownMenuTemplateUrl){n&&n.$destroy();var m=angular.element('<ul class="dropdown-menu"></ul>');p.dropdownMenu.replaceWith(m),p.dropdownMenu=m}f.close(q),p.selectedOption=null}angular.isFunction(s)&&s(a,c)}),a.$on("$locationChangeSuccess",function(){"disabled"!==q.getAutoClose()&&(q.isOpen=!1)});var w=a.$on("$destroy",function(){q.$destroy()});q.$on("$destroy",w)}]).directive("dropdown",["$log","$dropdownSuppressWarning",function(a,b){return{controller:"DropdownController",link:function(c,d,e,f){b||a.warn("dropdown is now deprecated. Use uib-dropdown instead."),f.init()}}}]).directive("dropdownMenu",["$log","$dropdownSuppressWarning",function(a,b){return{restrict:"AC",require:"?^dropdown",link:function(c,d,e,f){if(f&&!angular.isDefined(e.dropdownNested)){b||a.warn("dropdown-menu is now deprecated. Use uib-dropdown-menu instead."),d.addClass("dropdown-menu");var g=e.templateUrl;g&&(f.dropdownMenuTemplateUrl=g),f.dropdownMenu||(f.dropdownMenu=d)}}}}]).directive("keyboardNav",["$log","$dropdownSuppressWarning",function(a,b){return{restrict:"A",require:"?^dropdown",link:function(c,d,e,f){b||a.warn("keyboard-nav is now deprecated. Use uib-keyboard-nav instead."),d.bind("keydown",function(a){if(-1!==[38,40].indexOf(a.which)){a.preventDefault(),a.stopPropagation();var b=f.dropdownMenu.find("a");switch(a.which){case 40:angular.isNumber(f.selectedOption)?f.selectedOption=f.selectedOption===b.length-1?f.selectedOption:f.selectedOption+1:f.selectedOption=0;break;case 38:angular.isNumber(f.selectedOption)?f.selectedOption=0===f.selectedOption?0:f.selectedOption-1:f.selectedOption=b.length-1}b[f.selectedOption].focus()}})}}}]).directive("dropdownToggle",["$log","$dropdownSuppressWarning",function(a,b){return{require:"?^dropdown",link:function(c,d,e,f){if(b||a.warn("dropdown-toggle is now deprecated. Use uib-dropdown-toggle instead."),f){d.addClass("dropdown-toggle"),f.toggleElement=d;var g=function(a){a.preventDefault(),d.hasClass("disabled")||e.disabled||c.$apply(function(){f.toggle()})};d.bind("click",g),d.attr({"aria-haspopup":!0,"aria-expanded":!1}),c.$watch(f.isOpen,function(a){d.attr("aria-expanded",!!a)}),c.$on("$destroy",function(){d.unbind("click",g)})}}}}]),angular.module("ui.bootstrap.stackedMap",[]).factory("$$stackedMap",function(){return{createNew:function(){var a=[];return{add:function(b,c){a.push({key:b,value:c})},get:function(b){for(var c=0;c<a.length;c++)if(b==a[c].key)return a[c]},keys:function(){for(var b=[],c=0;c<a.length;c++)b.push(a[c].key);return b},top:function(){return a[a.length-1]},remove:function(b){for(var c=-1,d=0;d<a.length;d++)if(b==a[d].key){c=d;break}return a.splice(c,1)[0]},removeTop:function(){return a.splice(a.length-1,1)[0]},length:function(){return a.length}}}}}),angular.module("ui.bootstrap.modal",["ui.bootstrap.stackedMap"]).factory("$$multiMap",function(){return{createNew:function(){var a={};return{entries:function(){return Object.keys(a).map(function(b){return{key:b,value:a[b]}})},get:function(b){return a[b]},hasKey:function(b){return!!a[b]},keys:function(){return Object.keys(a)},put:function(b,c){a[b]||(a[b]=[]),a[b].push(c)},remove:function(b,c){var d=a[b];if(d){var e=d.indexOf(c);-1!==e&&d.splice(e,1),d.length||delete a[b]}}}}}}).directive("uibModalBackdrop",["$animate","$injector","$uibModalStack",function(a,b,c){function d(b,d,f){d.addClass("modal-backdrop"),f.modalInClass&&(e?e(d,{addClass:f.modalInClass}).start():a.addClass(d,f.modalInClass),b.$on(c.NOW_CLOSING_EVENT,function(b,c){var g=c();e?e(d,{removeClass:f.modalInClass}).start().then(g):a.removeClass(d,f.modalInClass).then(g)}))}var e=null;return b.has("$animateCss")&&(e=b.get("$animateCss")),{replace:!0,templateUrl:"template/modal/backdrop.html",compile:function(a,b){return a.addClass(b.backdropClass),d}}}]).directive("uibModalWindow",["$uibModalStack","$q","$animate","$injector",function(a,b,c,d){var e=null;return d.has("$animateCss")&&(e=d.get("$animateCss")),{scope:{index:"@"},replace:!0,transclude:!0,templateUrl:function(a,b){return b.templateUrl||"template/modal/window.html"},link:function(d,f,g){f.addClass(g.windowClass||""),f.addClass(g.windowTopClass||""),d.size=g.size,d.close=function(b){var c=a.getTop();c&&c.value.backdrop&&"static"!==c.value.backdrop&&b.target===b.currentTarget&&(b.preventDefault(),b.stopPropagation(),a.dismiss(c.key,"backdrop click"))},f.on("click",d.close),d.$isRendered=!0;var h=b.defer();g.$observe("modalRender",function(a){"true"==a&&h.resolve()}),h.promise.then(function(){var h=null;g.modalInClass&&(h=e?e(f,{addClass:g.modalInClass}).start():c.addClass(f,g.modalInClass),d.$on(a.NOW_CLOSING_EVENT,function(a,b){var d=b();e?e(f,{removeClass:g.modalInClass}).start().then(d):c.removeClass(f,g.modalInClass).then(d)})),b.when(h).then(function(){var a=f[0].querySelector("[autofocus]");a?a.focus():f[0].focus()});var i=a.getTop();i&&a.modalRendered(i.key)})}}}]).directive("uibModalAnimationClass",function(){return{compile:function(a,b){b.modalAnimation&&a.addClass(b.uibModalAnimationClass)}}}).directive("uibModalTransclude",function(){return{link:function(a,b,c,d,e){e(a.$parent,function(a){b.empty(),b.append(a)})}}}).factory("$uibModalStack",["$animate","$timeout","$document","$compile","$rootScope","$q","$injector","$$multiMap","$$stackedMap",function(a,b,c,d,e,f,g,h,i){function j(){for(var a=-1,b=u.keys(),c=0;c<b.length;c++)u.get(b[c]).value.backdrop&&(a=c);return a}function k(a,b){var d=c.find("body").eq(0),e=u.get(a).value;u.remove(a),n(e.modalDomEl,e.modalScope,function(){var b=e.openedClass||t;v.remove(b,a),d.toggleClass(b,v.hasKey(b)),l(!0)}),m(),b&&b.focus?b.focus():d.focus()}function l(a){var b;u.length()>0&&(b=u.top().value,b.modalDomEl.toggleClass(b.windowTopClass||"",a))}function m(){if(q&&-1==j()){var a=r;n(q,r,function(){a=null}),q=void 0,r=void 0}}function n(b,c,d){function e(){e.done||(e.done=!0,p?p(b,{event:"leave"}).start().then(function(){b.remove()}):a.leave(b),c.$destroy(),d&&d())}var g,h=null,i=function(){return g||(g=f.defer(),h=g.promise),function(){g.resolve()}};return c.$broadcast(w.NOW_CLOSING_EVENT,i),f.when(h).then(e)}function o(a,b,c){return!a.value.modalScope.$broadcast("modal.closing",b,c).defaultPrevented}var p=null;g.has("$animateCss")&&(p=g.get("$animateCss"));var q,r,s,t="modal-open",u=i.createNew(),v=h.createNew(),w={NOW_CLOSING_EVENT:"modal.stack.now-closing"},x=0,y="a[href], area[href], input:not([disabled]), button:not([disabled]),select:not([disabled]), textarea:not([disabled]), iframe, object, embed, *[tabindex], *[contenteditable=true]";return e.$watch(j,function(a){r&&(r.index=a)}),c.bind("keydown",function(a){if(a.isDefaultPrevented())return a;var b=u.top();if(b&&b.value.keyboard)switch(a.which){case 27:a.preventDefault(),e.$apply(function(){w.dismiss(b.key,"escape key press")});break;case 9:w.loadFocusElementList(b);var c=!1;a.shiftKey?w.isFocusInFirstItem(a)&&(c=w.focusLastFocusableElement()):w.isFocusInLastItem(a)&&(c=w.focusFirstFocusableElement()),c&&(a.preventDefault(),a.stopPropagation())}}),w.open=function(a,b){var f=c[0].activeElement,g=b.openedClass||t;l(!1),u.add(a,{deferred:b.deferred,renderDeferred:b.renderDeferred,modalScope:b.scope,backdrop:b.backdrop,keyboard:b.keyboard,openedClass:b.openedClass,windowTopClass:b.windowTopClass}),v.put(g,a);var h=c.find("body").eq(0),i=j();if(i>=0&&!q){r=e.$new(!0),r.index=i;var k=angular.element('<div uib-modal-backdrop="modal-backdrop"></div>');k.attr("backdrop-class",b.backdropClass),b.animation&&k.attr("modal-animation","true"),q=d(k)(r),h.append(q)}var m=angular.element('<div uib-modal-window="modal-window"></div>');m.attr({"template-url":b.windowTemplateUrl,"window-class":b.windowClass,"window-top-class":b.windowTopClass,size:b.size,index:u.length()-1,animate:"animate"}).html(b.content),b.animation&&m.attr("modal-animation","true");var n=d(m)(b.scope);u.top().value.modalDomEl=n,u.top().value.modalOpener=f,h.append(n),h.addClass(g),w.clearFocusListCache()},w.close=function(a,b){var c=u.get(a);return c&&o(c,b,!0)?(c.value.modalScope.$$uibDestructionScheduled=!0,c.value.deferred.resolve(b),k(a,c.value.modalOpener),!0):!c},w.dismiss=function(a,b){var c=u.get(a);return c&&o(c,b,!1)?(c.value.modalScope.$$uibDestructionScheduled=!0,c.value.deferred.reject(b),k(a,c.value.modalOpener),!0):!c},w.dismissAll=function(a){for(var b=this.getTop();b&&this.dismiss(b.key,a);)b=this.getTop()},w.getTop=function(){return u.top()},w.modalRendered=function(a){var b=u.get(a);b&&b.value.renderDeferred.resolve()},w.focusFirstFocusableElement=function(){return s.length>0?(s[0].focus(),!0):!1},w.focusLastFocusableElement=function(){return s.length>0?(s[s.length-1].focus(),!0):!1},w.isFocusInFirstItem=function(a){return s.length>0?(a.target||a.srcElement)==s[0]:!1},w.isFocusInLastItem=function(a){return s.length>0?(a.target||a.srcElement)==s[s.length-1]:!1},w.clearFocusListCache=function(){s=[],x=0},w.loadFocusElementList=function(a){if((void 0===s||!s.length)&&a){var b=a.value.modalDomEl;b&&b.length&&(s=b[0].querySelectorAll(y))}},w}]).provider("$uibModal",function(){var a={options:{animation:!0,backdrop:!0,keyboard:!0},$get:["$injector","$rootScope","$q","$templateRequest","$controller","$uibModalStack","$modalSuppressWarning","$log",function(b,c,d,e,f,g,h,i){function j(a){return a.template?d.when(a.template):e(angular.isFunction(a.templateUrl)?a.templateUrl():a.templateUrl)}function k(a){var c=[];return angular.forEach(a,function(a){angular.isFunction(a)||angular.isArray(a)?c.push(d.when(b.invoke(a))):angular.isString(a)?c.push(d.when(b.get(a))):c.push(d.when(a))}),c}var l={},m=null;return l.getPromiseChain=function(){return m},l.open=function(b){function e(){return r}var l=d.defer(),n=d.defer(),o=d.defer(),p={result:l.promise,opened:n.promise,rendered:o.promise,close:function(a){return g.close(p,a)},dismiss:function(a){return g.dismiss(p,a)}};if(b=angular.extend({},a.options,b),b.resolve=b.resolve||{},!b.template&&!b.templateUrl)throw new Error("One of template or templateUrl options is required.");var q,r=d.all([j(b)].concat(k(b.resolve)));return q=m=d.all([m]).then(e,e).then(function(a){var d=(b.scope||c).$new();d.$close=p.close,d.$dismiss=p.dismiss,d.$on("$destroy",function(){d.$$uibDestructionScheduled||d.$dismiss("$uibUnscheduledDestruction")});var e,j={},k=1;b.controller&&(j.$scope=d,j.$uibModalInstance=p,Object.defineProperty(j,"$modalInstance",{get:function(){return h||i.warn("$modalInstance is now deprecated. Use $uibModalInstance instead."),p}}),angular.forEach(b.resolve,function(b,c){j[c]=a[k++]}),e=f(b.controller,j),b.controllerAs&&(b.bindToController&&angular.extend(e,d),d[b.controllerAs]=e)),g.open(p,{scope:d,deferred:l,renderDeferred:o,content:a[0],animation:b.animation,backdrop:b.backdrop,keyboard:b.keyboard,backdropClass:b.backdropClass,windowTopClass:b.windowTopClass,windowClass:b.windowClass,windowTemplateUrl:b.windowTemplateUrl,size:b.size,openedClass:b.openedClass}),n.resolve(!0)},function(a){n.reject(a),l.reject(a)})["finally"](function(){m===q&&(m=null)}),p},l}]};return a}),angular.module("ui.bootstrap.modal").value("$modalSuppressWarning",!1).directive("modalBackdrop",["$animate","$injector","$modalStack","$log","$modalSuppressWarning",function(a,b,c,d,e){function f(b,f,h){e||d.warn("modal-backdrop is now deprecated. Use uib-modal-backdrop instead."),f.addClass("modal-backdrop"),h.modalInClass&&(g?g(f,{addClass:h.modalInClass}).start():a.addClass(f,h.modalInClass),b.$on(c.NOW_CLOSING_EVENT,function(b,c){var d=c();g?g(f,{removeClass:h.modalInClass}).start().then(d):a.removeClass(f,h.modalInClass).then(d)}))}var g=null;return b.has("$animateCss")&&(g=b.get("$animateCss")),{replace:!0,templateUrl:"template/modal/backdrop.html",compile:function(a,b){return a.addClass(b.backdropClass),f}}}]).directive("modalWindow",["$modalStack","$q","$animate","$injector","$log","$modalSuppressWarning",function(a,b,c,d,e,f){var g=null;return d.has("$animateCss")&&(g=d.get("$animateCss")),{scope:{index:"@"},replace:!0,transclude:!0,templateUrl:function(a,b){return b.templateUrl||"template/modal/window.html"},link:function(d,h,i){f||e.warn("modal-window is now deprecated. Use uib-modal-window instead."),h.addClass(i.windowClass||""),h.addClass(i.windowTopClass||""),d.size=i.size,d.close=function(b){var c=a.getTop();c&&c.value.backdrop&&"static"!==c.value.backdrop&&b.target===b.currentTarget&&(b.preventDefault(),b.stopPropagation(),a.dismiss(c.key,"backdrop click"))},h.on("click",d.close),d.$isRendered=!0;var j=b.defer();i.$observe("modalRender",function(a){"true"==a&&j.resolve()}),j.promise.then(function(){var e=null;i.modalInClass&&(e=g?g(h,{addClass:i.modalInClass}).start():c.addClass(h,i.modalInClass),d.$on(a.NOW_CLOSING_EVENT,function(a,b){var d=b();g?g(h,{removeClass:i.modalInClass}).start().then(d):c.removeClass(h,i.modalInClass).then(d)})),b.when(e).then(function(){var a=h[0].querySelector("[autofocus]");a?a.focus():h[0].focus()});var f=a.getTop();f&&a.modalRendered(f.key)})}}}]).directive("modalAnimationClass",["$log","$modalSuppressWarning",function(a,b){return{compile:function(c,d){b||a.warn("modal-animation-class is now deprecated. Use uib-modal-animation-class instead."),d.modalAnimation&&c.addClass(d.modalAnimationClass)}}}]).directive("modalTransclude",["$log","$modalSuppressWarning",function(a,b){return{link:function(c,d,e,f,g){
+  b||a.warn("modal-transclude is now deprecated. Use uib-modal-transclude instead."),g(c.$parent,function(a){d.empty(),d.append(a)})}}}]).service("$modalStack",["$animate","$timeout","$document","$compile","$rootScope","$q","$injector","$$multiMap","$$stackedMap","$uibModalStack","$log","$modalSuppressWarning",function(a,b,c,d,e,f,g,h,i,j,k,l){l||k.warn("$modalStack is now deprecated. Use $uibModalStack instead."),angular.extend(this,j)}]).provider("$modal",["$uibModalProvider",function(a){angular.extend(this,a),this.$get=["$injector","$log","$modalSuppressWarning",function(b,c,d){return d||c.warn("$modal is now deprecated. Use $uibModal instead."),b.invoke(a.$get)}]}]),angular.module("ui.bootstrap.pagination",[]).controller("UibPaginationController",["$scope","$attrs","$parse",function(a,b,c){var d=this,e={$setViewValue:angular.noop},f=b.numPages?c(b.numPages).assign:angular.noop;this.init=function(g,h){e=g,this.config=h,e.$render=function(){d.render()},b.itemsPerPage?a.$parent.$watch(c(b.itemsPerPage),function(b){d.itemsPerPage=parseInt(b,10),a.totalPages=d.calculateTotalPages()}):this.itemsPerPage=h.itemsPerPage,a.$watch("totalItems",function(){a.totalPages=d.calculateTotalPages()}),a.$watch("totalPages",function(b){f(a.$parent,b),a.page>b?a.selectPage(b):e.$render()})},this.calculateTotalPages=function(){var b=this.itemsPerPage<1?1:Math.ceil(a.totalItems/this.itemsPerPage);return Math.max(b||0,1)},this.render=function(){a.page=parseInt(e.$viewValue,10)||1},a.selectPage=function(b,c){c&&c.preventDefault();var d=!a.ngDisabled||!c;d&&a.page!==b&&b>0&&b<=a.totalPages&&(c&&c.target&&c.target.blur(),e.$setViewValue(b),e.$render())},a.getText=function(b){return a[b+"Text"]||d.config[b+"Text"]},a.noPrevious=function(){return 1===a.page},a.noNext=function(){return a.page===a.totalPages}}]).constant("uibPaginationConfig",{itemsPerPage:10,boundaryLinks:!1,directionLinks:!0,firstText:"First",previousText:"Previous",nextText:"Next",lastText:"Last",rotate:!0}).directive("uibPagination",["$parse","uibPaginationConfig",function(a,b){return{restrict:"EA",scope:{totalItems:"=",firstText:"@",previousText:"@",nextText:"@",lastText:"@",ngDisabled:"="},require:["uibPagination","?ngModel"],controller:"UibPaginationController",controllerAs:"pagination",templateUrl:function(a,b){return b.templateUrl||"template/pagination/pagination.html"},replace:!0,link:function(c,d,e,f){function g(a,b,c){return{number:a,text:b,active:c}}function h(a,b){var c=[],d=1,e=b,f=angular.isDefined(k)&&b>k;f&&(l?(d=Math.max(a-Math.floor(k/2),1),e=d+k-1,e>b&&(e=b,d=e-k+1)):(d=(Math.ceil(a/k)-1)*k+1,e=Math.min(d+k-1,b)));for(var h=d;e>=h;h++){var i=g(h,h,h===a);c.push(i)}if(f&&!l){if(d>1){var j=g(d-1,"...",!1);c.unshift(j)}if(b>e){var m=g(e+1,"...",!1);c.push(m)}}return c}var i=f[0],j=f[1];if(j){var k=angular.isDefined(e.maxSize)?c.$parent.$eval(e.maxSize):b.maxSize,l=angular.isDefined(e.rotate)?c.$parent.$eval(e.rotate):b.rotate;c.boundaryLinks=angular.isDefined(e.boundaryLinks)?c.$parent.$eval(e.boundaryLinks):b.boundaryLinks,c.directionLinks=angular.isDefined(e.directionLinks)?c.$parent.$eval(e.directionLinks):b.directionLinks,i.init(j,b),e.maxSize&&c.$parent.$watch(a(e.maxSize),function(a){k=parseInt(a,10),i.render()});var m=i.render;i.render=function(){m(),c.page>0&&c.page<=c.totalPages&&(c.pages=h(c.page,c.totalPages))}}}}}]).constant("uibPagerConfig",{itemsPerPage:10,previousText:"« Previous",nextText:"Next »",align:!0}).directive("uibPager",["uibPagerConfig",function(a){return{restrict:"EA",scope:{totalItems:"=",previousText:"@",nextText:"@",ngDisabled:"="},require:["uibPager","?ngModel"],controller:"UibPaginationController",controllerAs:"pagination",templateUrl:function(a,b){return b.templateUrl||"template/pagination/pager.html"},replace:!0,link:function(b,c,d,e){var f=e[0],g=e[1];g&&(b.align=angular.isDefined(d.align)?b.$parent.$eval(d.align):a.align,f.init(g,a))}}}]),angular.module("ui.bootstrap.pagination").value("$paginationSuppressWarning",!1).controller("PaginationController",["$scope","$attrs","$parse","$log","$paginationSuppressWarning",function(a,b,c,d,e){e||d.warn("PaginationController is now deprecated. Use UibPaginationController instead.");var f=this,g={$setViewValue:angular.noop},h=b.numPages?c(b.numPages).assign:angular.noop;this.init=function(d,e){g=d,this.config=e,g.$render=function(){f.render()},b.itemsPerPage?a.$parent.$watch(c(b.itemsPerPage),function(b){f.itemsPerPage=parseInt(b,10),a.totalPages=f.calculateTotalPages()}):this.itemsPerPage=e.itemsPerPage,a.$watch("totalItems",function(){a.totalPages=f.calculateTotalPages()}),a.$watch("totalPages",function(b){h(a.$parent,b),a.page>b?a.selectPage(b):g.$render()})},this.calculateTotalPages=function(){var b=this.itemsPerPage<1?1:Math.ceil(a.totalItems/this.itemsPerPage);return Math.max(b||0,1)},this.render=function(){a.page=parseInt(g.$viewValue,10)||1},a.selectPage=function(b,c){c&&c.preventDefault();var d=!a.ngDisabled||!c;d&&a.page!==b&&b>0&&b<=a.totalPages&&(c&&c.target&&c.target.blur(),g.$setViewValue(b),g.$render())},a.getText=function(b){return a[b+"Text"]||f.config[b+"Text"]},a.noPrevious=function(){return 1===a.page},a.noNext=function(){return a.page===a.totalPages}}]).directive("pagination",["$parse","uibPaginationConfig","$log","$paginationSuppressWarning",function(a,b,c,d){return{restrict:"EA",scope:{totalItems:"=",firstText:"@",previousText:"@",nextText:"@",lastText:"@",ngDisabled:"="},require:["pagination","?ngModel"],controller:"PaginationController",controllerAs:"pagination",templateUrl:function(a,b){return b.templateUrl||"template/pagination/pagination.html"},replace:!0,link:function(e,f,g,h){function i(a,b,c){return{number:a,text:b,active:c}}function j(a,b){var c=[],d=1,e=b,f=angular.isDefined(m)&&b>m;f&&(n?(d=Math.max(a-Math.floor(m/2),1),e=d+m-1,e>b&&(e=b,d=e-m+1)):(d=(Math.ceil(a/m)-1)*m+1,e=Math.min(d+m-1,b)));for(var g=d;e>=g;g++){var h=i(g,g,g===a);c.push(h)}if(f&&!n){if(d>1){var j=i(d-1,"...",!1);c.unshift(j)}if(b>e){var k=i(e+1,"...",!1);c.push(k)}}return c}d||c.warn("pagination is now deprecated. Use uib-pagination instead.");var k=h[0],l=h[1];if(l){var m=angular.isDefined(g.maxSize)?e.$parent.$eval(g.maxSize):b.maxSize,n=angular.isDefined(g.rotate)?e.$parent.$eval(g.rotate):b.rotate;e.boundaryLinks=angular.isDefined(g.boundaryLinks)?e.$parent.$eval(g.boundaryLinks):b.boundaryLinks,e.directionLinks=angular.isDefined(g.directionLinks)?e.$parent.$eval(g.directionLinks):b.directionLinks,k.init(l,b),g.maxSize&&e.$parent.$watch(a(g.maxSize),function(a){m=parseInt(a,10),k.render()});var o=k.render;k.render=function(){o(),e.page>0&&e.page<=e.totalPages&&(e.pages=j(e.page,e.totalPages))}}}}}]).directive("pager",["uibPagerConfig","$log","$paginationSuppressWarning",function(a,b,c){return{restrict:"EA",scope:{totalItems:"=",previousText:"@",nextText:"@",ngDisabled:"="},require:["pager","?ngModel"],controller:"PaginationController",controllerAs:"pagination",templateUrl:function(a,b){return b.templateUrl||"template/pagination/pager.html"},replace:!0,link:function(d,e,f,g){c||b.warn("pager is now deprecated. Use uib-pager instead.");var h=g[0],i=g[1];i&&(d.align=angular.isDefined(f.align)?d.$parent.$eval(f.align):a.align,h.init(i,a))}}}]),angular.module("ui.bootstrap.tooltip",["ui.bootstrap.position","ui.bootstrap.stackedMap"]).provider("$uibTooltip",function(){function a(a){var b=/[A-Z]/g,c="-";return a.replace(b,function(a,b){return(b?c:"")+a.toLowerCase()})}var b={placement:"top",animation:!0,popupDelay:0,popupCloseDelay:0,useContentExp:!1},c={mouseenter:"mouseleave",click:"click",focus:"blur",none:""},d={};this.options=function(a){angular.extend(d,a)},this.setTriggers=function(a){angular.extend(c,a)},this.$get=["$window","$compile","$timeout","$document","$uibPosition","$interpolate","$rootScope","$parse","$$stackedMap",function(e,f,g,h,i,j,k,l,m){var n=m.createNew();return h.on("keypress",function(a){if(27===a.which){var b=n.top();b&&(b.value.close(),n.removeTop(),b=null)}}),function(e,k,m,o){function p(a){var b=(a||o.trigger||m).split(" "),d=b.map(function(a){return c[a]||a});return{show:b,hide:d}}o=angular.extend({},b,d,o);var q=a(e),r=j.startSymbol(),s=j.endSymbol(),t="<div "+q+'-popup title="'+r+"title"+s+'" '+(o.useContentExp?'content-exp="contentExp()" ':'content="'+r+"content"+s+'" ')+'placement="'+r+"placement"+s+'" popup-class="'+r+"popupClass"+s+'" animation="animation" is-open="isOpen"origin-scope="origScope" style="visibility: hidden; display: block; top: -9999px; left: -9999px;"></div>';return{compile:function(a,b){var c=f(t);return function(a,b,d,f){function j(){L.isOpen?q():m()}function m(){(!K||a.$eval(d[k+"Enable"]))&&(u(),x(),L.popupDelay?F||(F=g(r,L.popupDelay,!1)):r())}function q(){s(),L.popupCloseDelay?G||(G=g(t,L.popupCloseDelay,!1)):t()}function r(){return s(),u(),L.content?(v(),void L.$evalAsync(function(){L.isOpen=!0,y(!0),Q()})):angular.noop}function s(){F&&(g.cancel(F),F=null),H&&(g.cancel(H),H=null)}function t(){s(),u(),L&&L.$evalAsync(function(){L.isOpen=!1,y(!1),L.animation?E||(E=g(w,150,!1)):w()})}function u(){G&&(g.cancel(G),G=null),E&&(g.cancel(E),E=null)}function v(){C||(D=L.$new(),C=c(D,function(a){I?h.find("body").append(a):b.after(a)}),z())}function w(){A(),E=null,C&&(C.remove(),C=null),D&&(D.$destroy(),D=null)}function x(){L.title=d[k+"Title"],O?L.content=O(a):L.content=d[e],L.popupClass=d[k+"Class"],L.placement=angular.isDefined(d[k+"Placement"])?d[k+"Placement"]:o.placement;var b=parseInt(d[k+"PopupDelay"],10),c=parseInt(d[k+"PopupCloseDelay"],10);L.popupDelay=isNaN(b)?o.popupDelay:b,L.popupCloseDelay=isNaN(c)?o.popupCloseDelay:c}function y(b){N&&angular.isFunction(N.assign)&&N.assign(a,b)}function z(){P.length=0,O?(P.push(a.$watch(O,function(a){L.content=a,!a&&L.isOpen&&t()})),P.push(D.$watch(function(){M||(M=!0,D.$$postDigest(function(){M=!1,L&&L.isOpen&&Q()}))}))):P.push(d.$observe(e,function(a){L.content=a,!a&&L.isOpen?t():Q()})),P.push(d.$observe(k+"Title",function(a){L.title=a,L.isOpen&&Q()})),P.push(d.$observe(k+"Placement",function(a){L.placement=a?a:o.placement,L.isOpen&&Q()}))}function A(){P.length&&(angular.forEach(P,function(a){a()}),P.length=0)}function B(){var a=d[k+"Trigger"];R(),J=p(a),"none"!==J.show&&J.show.forEach(function(a,c){a===J.hide[c]?b[0].addEventListener(a,j):a&&(b[0].addEventListener(a,m),J.hide[c].split(" ").forEach(function(a){b[0].addEventListener(a,q)})),b.on("keypress",function(a){27===a.which&&q()})})}var C,D,E,F,G,H,I=angular.isDefined(o.appendToBody)?o.appendToBody:!1,J=p(void 0),K=angular.isDefined(d[k+"Enable"]),L=a.$new(!0),M=!1,N=angular.isDefined(d[k+"IsOpen"])?l(d[k+"IsOpen"]):!1,O=o.useContentExp?l(d[e]):!1,P=[],Q=function(){C&&C.html()&&(H||(H=g(function(){C.css({top:0,left:0});var a=i.positionElements(b,C,L.placement,I);a.top+="px",a.left+="px",a.visibility="visible",C.css(a),H=null},0,!1)))};L.origScope=a,L.isOpen=!1,n.add(L,{close:t}),L.contentExp=function(){return L.content},d.$observe("disabled",function(a){a&&s(),a&&L.isOpen&&t()}),N&&a.$watch(N,function(a){L&&!a===L.isOpen&&j()});var R=function(){J.show.forEach(function(a){b.unbind(a,m)}),J.hide.forEach(function(a){a.split(" ").forEach(function(a){b[0].removeEventListener(a,q)})})};B();var S=a.$eval(d[k+"Animation"]);L.animation=angular.isDefined(S)?!!S:o.animation;var T=a.$eval(d[k+"AppendToBody"]);I=angular.isDefined(T)?T:I,I&&a.$on("$locationChangeSuccess",function(){L.isOpen&&t()}),a.$on("$destroy",function(){s(),u(),R(),w(),n.remove(L),L=null})}}}}}]}).directive("uibTooltipTemplateTransclude",["$animate","$sce","$compile","$templateRequest",function(a,b,c,d){return{link:function(e,f,g){var h,i,j,k=e.$eval(g.tooltipTemplateTranscludeScope),l=0,m=function(){i&&(i.remove(),i=null),h&&(h.$destroy(),h=null),j&&(a.leave(j).then(function(){i=null}),i=j,j=null)};e.$watch(b.parseAsResourceUrl(g.uibTooltipTemplateTransclude),function(b){var g=++l;b?(d(b,!0).then(function(d){if(g===l){var e=k.$new(),i=d,n=c(i)(e,function(b){m(),a.enter(b,f)});h=e,j=n,h.$emit("$includeContentLoaded",b)}},function(){g===l&&(m(),e.$emit("$includeContentError",b))}),e.$emit("$includeContentRequested",b)):m()}),e.$on("$destroy",m)}}}]).directive("uibTooltipClasses",function(){return{restrict:"A",link:function(a,b,c){a.placement&&b.addClass(a.placement),a.popupClass&&b.addClass(a.popupClass),a.animation()&&b.addClass(c.tooltipAnimationClass)}}}).directive("uibTooltipPopup",function(){return{replace:!0,scope:{content:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/tooltip/tooltip-popup.html",link:function(a,b){b.addClass("tooltip")}}}).directive("uibTooltip",["$uibTooltip",function(a){return a("uibTooltip","tooltip","mouseenter")}]).directive("uibTooltipTemplatePopup",function(){return{replace:!0,scope:{contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&",originScope:"&"},templateUrl:"template/tooltip/tooltip-template-popup.html",link:function(a,b){b.addClass("tooltip")}}}).directive("uibTooltipTemplate",["$uibTooltip",function(a){return a("uibTooltipTemplate","tooltip","mouseenter",{useContentExp:!0})}]).directive("uibTooltipHtmlPopup",function(){return{replace:!0,scope:{contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/tooltip/tooltip-html-popup.html",link:function(a,b){b.addClass("tooltip")}}}).directive("uibTooltipHtml",["$uibTooltip",function(a){return a("uibTooltipHtml","tooltip","mouseenter",{useContentExp:!0})}]),angular.module("ui.bootstrap.tooltip").value("$tooltipSuppressWarning",!1).provider("$tooltip",["$uibTooltipProvider",function(a){angular.extend(this,a),this.$get=["$log","$tooltipSuppressWarning","$injector",function(b,c,d){return c||b.warn("$tooltip is now deprecated. Use $uibTooltip instead."),d.invoke(a.$get)}]}]).directive("tooltipTemplateTransclude",["$animate","$sce","$compile","$templateRequest","$log","$tooltipSuppressWarning",function(a,b,c,d,e,f){return{link:function(g,h,i){f||e.warn("tooltip-template-transclude is now deprecated. Use uib-tooltip-template-transclude instead.");var j,k,l,m=g.$eval(i.tooltipTemplateTranscludeScope),n=0,o=function(){k&&(k.remove(),k=null),j&&(j.$destroy(),j=null),l&&(a.leave(l).then(function(){k=null}),k=l,l=null)};g.$watch(b.parseAsResourceUrl(i.tooltipTemplateTransclude),function(b){var e=++n;b?(d(b,!0).then(function(d){if(e===n){var f=m.$new(),g=d,i=c(g)(f,function(b){o(),a.enter(b,h)});j=f,l=i,j.$emit("$includeContentLoaded",b)}},function(){e===n&&(o(),g.$emit("$includeContentError",b))}),g.$emit("$includeContentRequested",b)):o()}),g.$on("$destroy",o)}}}]).directive("tooltipClasses",["$log","$tooltipSuppressWarning",function(a,b){return{restrict:"A",link:function(c,d,e){b||a.warn("tooltip-classes is now deprecated. Use uib-tooltip-classes instead."),c.placement&&d.addClass(c.placement),c.popupClass&&d.addClass(c.popupClass),c.animation()&&d.addClass(e.tooltipAnimationClass)}}}]).directive("tooltipPopup",["$log","$tooltipSuppressWarning",function(a,b){return{replace:!0,scope:{content:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/tooltip/tooltip-popup.html",link:function(c,d){b||a.warn("tooltip-popup is now deprecated. Use uib-tooltip-popup instead."),d.addClass("tooltip")}}}]).directive("tooltip",["$tooltip",function(a){return a("tooltip","tooltip","mouseenter")}]).directive("tooltipTemplatePopup",["$log","$tooltipSuppressWarning",function(a,b){return{replace:!0,scope:{contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&",originScope:"&"},templateUrl:"template/tooltip/tooltip-template-popup.html",link:function(c,d){b||a.warn("tooltip-template-popup is now deprecated. Use uib-tooltip-template-popup instead."),d.addClass("tooltip")}}}]).directive("tooltipTemplate",["$tooltip",function(a){return a("tooltipTemplate","tooltip","mouseenter",{useContentExp:!0})}]).directive("tooltipHtmlPopup",["$log","$tooltipSuppressWarning",function(a,b){return{replace:!0,scope:{contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/tooltip/tooltip-html-popup.html",link:function(c,d){b||a.warn("tooltip-html-popup is now deprecated. Use uib-tooltip-html-popup instead."),d.addClass("tooltip")}}}]).directive("tooltipHtml",["$tooltip",function(a){return a("tooltipHtml","tooltip","mouseenter",{useContentExp:!0})}]),angular.module("ui.bootstrap.popover",["ui.bootstrap.tooltip"]).directive("uibPopoverTemplatePopup",function(){return{replace:!0,scope:{title:"@",contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&",originScope:"&"},templateUrl:"template/popover/popover-template.html",link:function(a,b){b.addClass("popover")}}}).directive("uibPopoverTemplate",["$uibTooltip",function(a){return a("uibPopoverTemplate","popover","click",{useContentExp:!0})}]).directive("uibPopoverHtmlPopup",function(){return{replace:!0,scope:{contentExp:"&",title:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/popover/popover-html.html",link:function(a,b){b.addClass("popover")}}}).directive("uibPopoverHtml",["$uibTooltip",function(a){return a("uibPopoverHtml","popover","click",{useContentExp:!0})}]).directive("uibPopoverPopup",function(){return{replace:!0,scope:{title:"@",content:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/popover/popover.html",link:function(a,b){b.addClass("popover")}}}).directive("uibPopover",["$uibTooltip",function(a){return a("uibPopover","popover","click")}]),angular.module("ui.bootstrap.popover").value("$popoverSuppressWarning",!1).directive("popoverTemplatePopup",["$log","$popoverSuppressWarning",function(a,b){return{replace:!0,scope:{title:"@",contentExp:"&",placement:"@",popupClass:"@",animation:"&",isOpen:"&",originScope:"&"},templateUrl:"template/popover/popover-template.html",link:function(c,d){b||a.warn("popover-template-popup is now deprecated. Use uib-popover-template-popup instead."),d.addClass("popover")}}}]).directive("popoverTemplate",["$tooltip",function(a){return a("popoverTemplate","popover","click",{useContentExp:!0})}]).directive("popoverHtmlPopup",["$log","$popoverSuppressWarning",function(a,b){return{replace:!0,scope:{contentExp:"&",title:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/popover/popover-html.html",link:function(c,d){b||a.warn("popover-html-popup is now deprecated. Use uib-popover-html-popup instead."),d.addClass("popover")}}}]).directive("popoverHtml",["$tooltip",function(a){return a("popoverHtml","popover","click",{useContentExp:!0})}]).directive("popoverPopup",["$log","$popoverSuppressWarning",function(a,b){return{replace:!0,scope:{title:"@",content:"@",placement:"@",popupClass:"@",animation:"&",isOpen:"&"},templateUrl:"template/popover/popover.html",link:function(c,d){b||a.warn("popover-popup is now deprecated. Use uib-popover-popup instead."),d.addClass("popover")}}}]).directive("popover",["$tooltip",function(a){return a("popover","popover","click")}]),angular.module("ui.bootstrap.progressbar",[]).constant("uibProgressConfig",{animate:!0,max:100}).controller("UibProgressController",["$scope","$attrs","uibProgressConfig",function(a,b,c){var d=this,e=angular.isDefined(b.animate)?a.$parent.$eval(b.animate):c.animate;this.bars=[],a.max=angular.isDefined(a.max)?a.max:c.max,this.addBar=function(b,c,f){e||c.css({transition:"none"}),this.bars.push(b),b.max=a.max,b.title=f&&angular.isDefined(f.title)?f.title:"progressbar",b.$watch("value",function(a){b.recalculatePercentage()}),b.recalculatePercentage=function(){var a=d.bars.reduce(function(a,b){return b.percent=+(100*b.value/b.max).toFixed(2),a+b.percent},0);a>100&&(b.percent-=a-100)},b.$on("$destroy",function(){c=null,d.removeBar(b)})},this.removeBar=function(a){this.bars.splice(this.bars.indexOf(a),1),this.bars.forEach(function(a){a.recalculatePercentage()})},a.$watch("max",function(b){d.bars.forEach(function(b){b.max=a.max,b.recalculatePercentage()})})}]).directive("uibProgress",function(){return{replace:!0,transclude:!0,controller:"UibProgressController",require:"uibProgress",scope:{max:"=?"},templateUrl:"template/progressbar/progress.html"}}).directive("uibBar",function(){return{replace:!0,transclude:!0,require:"^uibProgress",scope:{value:"=",type:"@"},templateUrl:"template/progressbar/bar.html",link:function(a,b,c,d){d.addBar(a,b,c)}}}).directive("uibProgressbar",function(){return{replace:!0,transclude:!0,controller:"UibProgressController",scope:{value:"=",max:"=?",type:"@"},templateUrl:"template/progressbar/progressbar.html",link:function(a,b,c,d){d.addBar(a,angular.element(b.children()[0]),{title:c.title})}}}),angular.module("ui.bootstrap.progressbar").value("$progressSuppressWarning",!1).controller("ProgressController",["$scope","$attrs","uibProgressConfig","$log","$progressSuppressWarning",function(a,b,c,d,e){e||d.warn("ProgressController is now deprecated. Use UibProgressController instead.");var f=this,g=angular.isDefined(b.animate)?a.$parent.$eval(b.animate):c.animate;this.bars=[],a.max=angular.isDefined(a.max)?a.max:c.max,this.addBar=function(b,c,d){g||c.css({transition:"none"}),this.bars.push(b),b.max=a.max,b.title=d&&angular.isDefined(d.title)?d.title:"progressbar",b.$watch("value",function(a){b.recalculatePercentage()}),b.recalculatePercentage=function(){b.percent=+(100*b.value/b.max).toFixed(2);var a=f.bars.reduce(function(a,b){return a+b.percent},0);a>100&&(b.percent-=a-100)},b.$on("$destroy",function(){c=null,f.removeBar(b)})},this.removeBar=function(a){this.bars.splice(this.bars.indexOf(a),1)},a.$watch("max",function(b){f.bars.forEach(function(b){b.max=a.max,b.recalculatePercentage()})})}]).directive("progress",["$log","$progressSuppressWarning",function(a,b){return{replace:!0,transclude:!0,controller:"ProgressController",require:"progress",scope:{max:"=?",title:"@?"},templateUrl:"template/progressbar/progress.html",link:function(){b||a.warn("progress is now deprecated. Use uib-progress instead.")}}}]).directive("bar",["$log","$progressSuppressWarning",function(a,b){return{replace:!0,transclude:!0,require:"^progress",scope:{value:"=",type:"@"},templateUrl:"template/progressbar/bar.html",link:function(c,d,e,f){b||a.warn("bar is now deprecated. Use uib-bar instead."),f.addBar(c,d)}}}]).directive("progressbar",["$log","$progressSuppressWarning",function(a,b){return{replace:!0,transclude:!0,controller:"ProgressController",scope:{value:"=",max:"=?",type:"@"},templateUrl:"template/progressbar/progressbar.html",link:function(c,d,e,f){b||a.warn("progressbar is now deprecated. Use uib-progressbar instead."),f.addBar(c,angular.element(d.children()[0]),{title:e.title})}}}]),angular.module("ui.bootstrap.rating",[]).constant("uibRatingConfig",{max:5,stateOn:null,stateOff:null,titles:["one","two","three","four","five"]}).controller("UibRatingController",["$scope","$attrs","uibRatingConfig",function(a,b,c){var d={$setViewValue:angular.noop};this.init=function(e){d=e,d.$render=this.render,d.$formatters.push(function(a){return angular.isNumber(a)&&a<<0!==a&&(a=Math.round(a)),a}),this.stateOn=angular.isDefined(b.stateOn)?a.$parent.$eval(b.stateOn):c.stateOn,this.stateOff=angular.isDefined(b.stateOff)?a.$parent.$eval(b.stateOff):c.stateOff;var f=angular.isDefined(b.titles)?a.$parent.$eval(b.titles):c.titles;this.titles=angular.isArray(f)&&f.length>0?f:c.titles;var g=angular.isDefined(b.ratingStates)?a.$parent.$eval(b.ratingStates):new Array(angular.isDefined(b.max)?a.$parent.$eval(b.max):c.max);a.range=this.buildTemplateObjects(g)},this.buildTemplateObjects=function(a){for(var b=0,c=a.length;c>b;b++)a[b]=angular.extend({index:b},{stateOn:this.stateOn,stateOff:this.stateOff,title:this.getTitle(b)},a[b]);return a},this.getTitle=function(a){return a>=this.titles.length?a+1:this.titles[a]},a.rate=function(b){!a.readonly&&b>=0&&b<=a.range.length&&(d.$setViewValue(d.$viewValue===b?0:b),d.$render())},a.enter=function(b){a.readonly||(a.value=b),a.onHover({value:b})},a.reset=function(){a.value=d.$viewValue,a.onLeave()},a.onKeydown=function(b){/(37|38|39|40)/.test(b.which)&&(b.preventDefault(),b.stopPropagation(),a.rate(a.value+(38===b.which||39===b.which?1:-1)))},this.render=function(){a.value=d.$viewValue}}]).directive("uibRating",function(){return{require:["uibRating","ngModel"],scope:{readonly:"=?",onHover:"&",onLeave:"&"},controller:"UibRatingController",templateUrl:"template/rating/rating.html",replace:!0,link:function(a,b,c,d){var e=d[0],f=d[1];e.init(f)}}}),angular.module("ui.bootstrap.rating").value("$ratingSuppressWarning",!1).controller("RatingController",["$scope","$attrs","$controller","$log","$ratingSuppressWarning",function(a,b,c,d,e){e||d.warn("RatingController is now deprecated. Use UibRatingController instead."),angular.extend(this,c("UibRatingController",{$scope:a,$attrs:b}))}]).directive("rating",["$log","$ratingSuppressWarning",function(a,b){return{require:["rating","ngModel"],scope:{readonly:"=?",onHover:"&",onLeave:"&"},controller:"RatingController",templateUrl:"template/rating/rating.html",replace:!0,link:function(c,d,e,f){b||a.warn("rating is now deprecated. Use uib-rating instead.");var g=f[0],h=f[1];g.init(h)}}}]),angular.module("ui.bootstrap.tabs",[]).controller("UibTabsetController",["$scope",function(a){var b=this,c=b.tabs=a.tabs=[];b.select=function(a){angular.forEach(c,function(b){b.active&&b!==a&&(b.active=!1,b.onDeselect(),a.selectCalled=!1)}),a.active=!0,a.selectCalled||(a.onSelect(),a.selectCalled=!0)},b.addTab=function(a){c.push(a),1===c.length&&a.active!==!1?a.active=!0:a.active?b.select(a):a.active=!1},b.removeTab=function(a){var e=c.indexOf(a);if(a.active&&c.length>1&&!d){var f=e==c.length-1?e-1:e+1;b.select(c[f])}c.splice(e,1)};var d;a.$on("$destroy",function(){d=!0})}]).directive("uibTabset",function(){return{restrict:"EA",transclude:!0,replace:!0,scope:{type:"@"},controller:"UibTabsetController",templateUrl:"template/tabs/tabset.html",link:function(a,b,c){a.vertical=angular.isDefined(c.vertical)?a.$parent.$eval(c.vertical):!1,a.justified=angular.isDefined(c.justified)?a.$parent.$eval(c.justified):!1}}}).directive("uibTab",["$parse",function(a){return{require:"^uibTabset",restrict:"EA",replace:!0,templateUrl:"template/tabs/tab.html",transclude:!0,scope:{active:"=?",heading:"@",onSelect:"&select",onDeselect:"&deselect"},controller:function(){},link:function(b,c,d,e,f){b.$watch("active",function(a){a&&e.select(b)}),b.disabled=!1,d.disable&&b.$parent.$watch(a(d.disable),function(a){b.disabled=!!a}),b.select=function(){b.disabled||(b.active=!0)},e.addTab(b),b.$on("$destroy",function(){e.removeTab(b)}),b.$transcludeFn=f}}}]).directive("uibTabHeadingTransclude",function(){return{restrict:"A",require:["?^uibTab","?^tab"],link:function(a,b){a.$watch("headingElement",function(a){a&&(b.html(""),b.append(a))})}}}).directive("uibTabContentTransclude",function(){function a(a){return a.tagName&&(a.hasAttribute("tab-heading")||a.hasAttribute("data-tab-heading")||a.hasAttribute("x-tab-heading")||a.hasAttribute("uib-tab-heading")||a.hasAttribute("data-uib-tab-heading")||a.hasAttribute("x-uib-tab-heading")||"tab-heading"===a.tagName.toLowerCase()||"data-tab-heading"===a.tagName.toLowerCase()||"x-tab-heading"===a.tagName.toLowerCase()||"uib-tab-heading"===a.tagName.toLowerCase()||"data-uib-tab-heading"===a.tagName.toLowerCase()||"x-uib-tab-heading"===a.tagName.toLowerCase())}return{restrict:"A",require:["?^uibTabset","?^tabset"],link:function(b,c,d){var e=b.$eval(d.uibTabContentTransclude);e.$transcludeFn(e.$parent,function(b){angular.forEach(b,function(b){a(b)?e.headingElement=b:c.append(b)})})}}}),angular.module("ui.bootstrap.tabs").value("$tabsSuppressWarning",!1).controller("TabsetController",["$scope","$controller","$log","$tabsSuppressWarning",function(a,b,c,d){d||c.warn("TabsetController is now deprecated. Use UibTabsetController instead."),angular.extend(this,b("UibTabsetController",{$scope:a}))}]).directive("tabset",["$log","$tabsSuppressWarning",function(a,b){return{restrict:"EA",transclude:!0,replace:!0,scope:{type:"@"},controller:"TabsetController",templateUrl:"template/tabs/tabset.html",link:function(c,d,e){b||a.warn("tabset is now deprecated. Use uib-tabset instead."),c.vertical=angular.isDefined(e.vertical)?c.$parent.$eval(e.vertical):!1,c.justified=angular.isDefined(e.justified)?c.$parent.$eval(e.justified):!1}}}]).directive("tab",["$parse","$log","$tabsSuppressWarning",function(a,b,c){return{require:"^tabset",restrict:"EA",replace:!0,templateUrl:"template/tabs/tab.html",transclude:!0,scope:{active:"=?",heading:"@",onSelect:"&select",onDeselect:"&deselect"},controller:function(){},link:function(d,e,f,g,h){c||b.warn("tab is now deprecated. Use uib-tab instead."),d.$watch("active",function(a){a&&g.select(d)}),d.disabled=!1,f.disable&&d.$parent.$watch(a(f.disable),function(a){d.disabled=!!a}),d.select=function(){d.disabled||(d.active=!0)},g.addTab(d),d.$on("$destroy",function(){g.removeTab(d)}),d.$transcludeFn=h}}}]).directive("tabHeadingTransclude",["$log","$tabsSuppressWarning",function(a,b){return{restrict:"A",require:"^tab",link:function(c,d){b||a.warn("tab-heading-transclude is now deprecated. Use uib-tab-heading-transclude instead."),c.$watch("headingElement",function(a){a&&(d.html(""),d.append(a))})}}}]).directive("tabContentTransclude",["$log","$tabsSuppressWarning",function(a,b){function c(a){return a.tagName&&(a.hasAttribute("tab-heading")||a.hasAttribute("data-tab-heading")||a.hasAttribute("x-tab-heading")||"tab-heading"===a.tagName.toLowerCase()||"data-tab-heading"===a.tagName.toLowerCase()||"x-tab-heading"===a.tagName.toLowerCase())}return{restrict:"A",require:"^tabset",link:function(d,e,f){b||a.warn("tab-content-transclude is now deprecated. Use uib-tab-content-transclude instead.");var g=d.$eval(f.tabContentTransclude);g.$transcludeFn(g.$parent,function(a){angular.forEach(a,function(a){c(a)?g.headingElement=a:e.append(a)})})}}}]),angular.module("ui.bootstrap.timepicker",[]).constant("uibTimepickerConfig",{hourStep:1,minuteStep:1,showMeridian:!0,meridians:null,readonlyInput:!1,mousewheel:!0,arrowkeys:!0,showSpinners:!0}).controller("UibTimepickerController",["$scope","$element","$attrs","$parse","$log","$locale","uibTimepickerConfig",function(a,b,c,d,e,f,g){function h(){var b=parseInt(a.hours,10),c=a.showMeridian?b>0&&13>b:b>=0&&24>b;return c?(a.showMeridian&&(12===b&&(b=0),a.meridian===r[1]&&(b+=12)),b):void 0}function i(){var b=parseInt(a.minutes,10);return b>=0&&60>b?b:void 0}function j(a){return angular.isDefined(a)&&a.toString().length<2?"0"+a:a.toString()}function k(a){l(),q.$setViewValue(new Date(p)),m(a)}function l(){q.$setValidity("time",!0),a.invalidHours=!1,a.invalidMinutes=!1}function m(b){var c=p.getHours(),d=p.getMinutes();a.showMeridian&&(c=0===c||12===c?12:c%12),a.hours="h"===b?c:j(c),"m"!==b&&(a.minutes=j(d)),a.meridian=p.getHours()<12?r[0]:r[1]}function n(a,b){var c=new Date(a.getTime()+6e4*b),d=new Date(a);return d.setHours(c.getHours(),c.getMinutes()),d}function o(a){p=n(p,a),k()}var p=new Date,q={$setViewValue:angular.noop},r=angular.isDefined(c.meridians)?a.$parent.$eval(c.meridians):g.meridians||f.DATETIME_FORMATS.AMPMS;a.tabindex=angular.isDefined(c.tabindex)?c.tabindex:0,b.removeAttr("tabindex"),this.init=function(b,d){q=b,q.$render=this.render,q.$formatters.unshift(function(a){return a?new Date(a):null});var e=d.eq(0),f=d.eq(1),h=angular.isDefined(c.mousewheel)?a.$parent.$eval(c.mousewheel):g.mousewheel;h&&this.setupMousewheelEvents(e,f);var i=angular.isDefined(c.arrowkeys)?a.$parent.$eval(c.arrowkeys):g.arrowkeys;i&&this.setupArrowkeyEvents(e,f),a.readonlyInput=angular.isDefined(c.readonlyInput)?a.$parent.$eval(c.readonlyInput):g.readonlyInput,this.setupInputEvents(e,f)};var s=g.hourStep;c.hourStep&&a.$parent.$watch(d(c.hourStep),function(a){s=parseInt(a,10)});var t=g.minuteStep;c.minuteStep&&a.$parent.$watch(d(c.minuteStep),function(a){t=parseInt(a,10)});var u;a.$parent.$watch(d(c.min),function(a){var b=new Date(a);u=isNaN(b)?void 0:b});var v;a.$parent.$watch(d(c.max),function(a){var b=new Date(a);v=isNaN(b)?void 0:b}),a.noIncrementHours=function(){var a=n(p,60*s);
+  return a>v||p>a&&u>a},a.noDecrementHours=function(){var a=n(p,60*-s);return u>a||a>p&&a>v},a.noIncrementMinutes=function(){var a=n(p,t);return a>v||p>a&&u>a},a.noDecrementMinutes=function(){var a=n(p,-t);return u>a||a>p&&a>v},a.noToggleMeridian=function(){return p.getHours()<13?n(p,720)>v:n(p,-720)<u},a.showMeridian=g.showMeridian,c.showMeridian&&a.$parent.$watch(d(c.showMeridian),function(b){if(a.showMeridian=!!b,q.$error.time){var c=h(),d=i();angular.isDefined(c)&&angular.isDefined(d)&&(p.setHours(c),k())}else m()}),this.setupMousewheelEvents=function(b,c){var d=function(a){a.originalEvent&&(a=a.originalEvent);var b=a.wheelDelta?a.wheelDelta:-a.deltaY;return a.detail||b>0};b.bind("mousewheel wheel",function(b){a.$apply(d(b)?a.incrementHours():a.decrementHours()),b.preventDefault()}),c.bind("mousewheel wheel",function(b){a.$apply(d(b)?a.incrementMinutes():a.decrementMinutes()),b.preventDefault()})},this.setupArrowkeyEvents=function(b,c){b.bind("keydown",function(b){38===b.which?(b.preventDefault(),a.incrementHours(),a.$apply()):40===b.which&&(b.preventDefault(),a.decrementHours(),a.$apply())}),c.bind("keydown",function(b){38===b.which?(b.preventDefault(),a.incrementMinutes(),a.$apply()):40===b.which&&(b.preventDefault(),a.decrementMinutes(),a.$apply())})},this.setupInputEvents=function(b,c){if(a.readonlyInput)return a.updateHours=angular.noop,void(a.updateMinutes=angular.noop);var d=function(b,c){q.$setViewValue(null),q.$setValidity("time",!1),angular.isDefined(b)&&(a.invalidHours=b),angular.isDefined(c)&&(a.invalidMinutes=c)};a.updateHours=function(){var a=h(),b=i();angular.isDefined(a)&&angular.isDefined(b)?(p.setHours(a),u>p||p>v?d(!0):k("h")):d(!0)},b.bind("blur",function(b){!a.invalidHours&&a.hours<10&&a.$apply(function(){a.hours=j(a.hours)})}),a.updateMinutes=function(){var a=i(),b=h();angular.isDefined(a)&&angular.isDefined(b)?(p.setMinutes(a),u>p||p>v?d(void 0,!0):k("m")):d(void 0,!0)},c.bind("blur",function(b){!a.invalidMinutes&&a.minutes<10&&a.$apply(function(){a.minutes=j(a.minutes)})})},this.render=function(){var b=q.$viewValue;isNaN(b)?(q.$setValidity("time",!1),e.error('Timepicker directive: "ng-model" value must be a Date object, a number of milliseconds since 01.01.1970 or a string representing an RFC2822 or ISO 8601 date.')):(b&&(p=b),u>p||p>v?(q.$setValidity("time",!1),a.invalidHours=!0,a.invalidMinutes=!0):l(),m())},a.showSpinners=angular.isDefined(c.showSpinners)?a.$parent.$eval(c.showSpinners):g.showSpinners,a.incrementHours=function(){a.noIncrementHours()||o(60*s)},a.decrementHours=function(){a.noDecrementHours()||o(60*-s)},a.incrementMinutes=function(){a.noIncrementMinutes()||o(t)},a.decrementMinutes=function(){a.noDecrementMinutes()||o(-t)},a.toggleMeridian=function(){a.noToggleMeridian()||o(720*(p.getHours()<12?1:-1))}}]).directive("uibTimepicker",function(){return{restrict:"EA",require:["uibTimepicker","?^ngModel"],controller:"UibTimepickerController",controllerAs:"timepicker",replace:!0,scope:{},templateUrl:function(a,b){return b.templateUrl||"template/timepicker/timepicker.html"},link:function(a,b,c,d){var e=d[0],f=d[1];f&&e.init(f,b.find("input"))}}}),angular.module("ui.bootstrap.timepicker").value("$timepickerSuppressWarning",!1).controller("TimepickerController",["$scope","$element","$attrs","$controller","$log","$timepickerSuppressWarning",function(a,b,c,d,e,f){f||e.warn("TimepickerController is now deprecated. Use UibTimepickerController instead."),angular.extend(this,d("UibTimepickerController",{$scope:a,$element:b,$attrs:c}))}]).directive("timepicker",["$log","$timepickerSuppressWarning",function(a,b){return{restrict:"EA",require:["timepicker","?^ngModel"],controller:"TimepickerController",controllerAs:"timepicker",replace:!0,scope:{},templateUrl:function(a,b){return b.templateUrl||"template/timepicker/timepicker.html"},link:function(c,d,e,f){b||a.warn("timepicker is now deprecated. Use uib-timepicker instead.");var g=f[0],h=f[1];h&&g.init(h,d.find("input"))}}}]),angular.module("ui.bootstrap.typeahead",["ui.bootstrap.position"]).factory("uibTypeaheadParser",["$parse",function(a){var b=/^\s*([\s\S]+?)(?:\s+as\s+([\s\S]+?))?\s+for\s+(?:([\$\w][\$\w\d]*))\s+in\s+([\s\S]+?)$/;return{parse:function(c){var d=c.match(b);if(!d)throw new Error('Expected typeahead specification in form of "_modelValue_ (as _label_)? for _item_ in _collection_" but got "'+c+'".');return{itemName:d[3],source:a(d[4]),viewMapper:a(d[2]||d[1]),modelMapper:a(d[1])}}}}]).controller("UibTypeaheadController",["$scope","$element","$attrs","$compile","$parse","$q","$timeout","$document","$window","$rootScope","$uibPosition","uibTypeaheadParser",function(a,b,c,d,e,f,g,h,i,j,k,l){function m(){K.moveInProgress||(K.moveInProgress=!0,K.$digest()),S&&g.cancel(S),S=g(function(){K.matches.length&&n(),K.moveInProgress=!1},r)}function n(){K.position=C?k.offset(b):k.position(b),K.position.top+=b.prop("offsetHeight")}var o,p,q=[9,13,27,38,40],r=200,s=a.$eval(c.typeaheadMinLength);s||0===s||(s=1);var t,u,v=a.$eval(c.typeaheadWaitMs)||0,w=a.$eval(c.typeaheadEditable)!==!1,x=e(c.typeaheadLoading).assign||angular.noop,y=e(c.typeaheadOnSelect),z=angular.isDefined(c.typeaheadSelectOnBlur)?a.$eval(c.typeaheadSelectOnBlur):!1,A=e(c.typeaheadNoResults).assign||angular.noop,B=c.typeaheadInputFormatter?e(c.typeaheadInputFormatter):void 0,C=c.typeaheadAppendToBody?a.$eval(c.typeaheadAppendToBody):!1,D=c.typeaheadAppendToElementId||!1,E=a.$eval(c.typeaheadFocusFirst)!==!1,F=c.typeaheadSelectOnExact?a.$eval(c.typeaheadSelectOnExact):!1,G=e(c.ngModel),H=e(c.ngModel+"($$$p)"),I=function(b,c){return angular.isFunction(G(a))&&p&&p.$options&&p.$options.getterSetter?H(b,{$$$p:c}):G.assign(b,c)},J=l.parse(c.uibTypeahead),K=a.$new(),L=a.$on("$destroy",function(){K.$destroy()});K.$on("$destroy",L);var M="typeahead-"+K.$id+"-"+Math.floor(1e4*Math.random());b.attr({"aria-autocomplete":"list","aria-expanded":!1,"aria-owns":M});var N=angular.element("<div uib-typeahead-popup></div>");N.attr({id:M,matches:"matches",active:"activeIdx",select:"select(activeIdx)","move-in-progress":"moveInProgress",query:"query",position:"position"}),angular.isDefined(c.typeaheadTemplateUrl)&&N.attr("template-url",c.typeaheadTemplateUrl),angular.isDefined(c.typeaheadPopupTemplateUrl)&&N.attr("popup-template-url",c.typeaheadPopupTemplateUrl);var O=function(){K.matches=[],K.activeIdx=-1,b.attr("aria-expanded",!1)},P=function(a){return M+"-option-"+a};K.$watch("activeIdx",function(a){0>a?b.removeAttr("aria-activedescendant"):b.attr("aria-activedescendant",P(a))});var Q=function(a,b){return K.matches.length>b&&a?a.toUpperCase()===K.matches[b].label.toUpperCase():!1},R=function(c){var d={$viewValue:c};x(a,!0),A(a,!1),f.when(J.source(a,d)).then(function(e){var f=c===o.$viewValue;if(f&&t)if(e&&e.length>0){K.activeIdx=E?0:-1,A(a,!1),K.matches.length=0;for(var g=0;g<e.length;g++)d[J.itemName]=e[g],K.matches.push({id:P(g),label:J.viewMapper(K,d),model:e[g]});K.query=c,n(),b.attr("aria-expanded",!0),F&&1===K.matches.length&&Q(c,0)&&K.select(0)}else O(),A(a,!0);f&&x(a,!1)},function(){O(),x(a,!1),A(a,!0)})};C&&(angular.element(i).bind("resize",m),h.find("body").bind("scroll",m));var S;K.moveInProgress=!1,K.query=void 0;var T,U=function(a){T=g(function(){R(a)},v)},V=function(){T&&g.cancel(T)};O(),K.select=function(d){var e,f,h={};u=!0,h[J.itemName]=f=K.matches[d].model,e=J.modelMapper(a,h),I(a,e),o.$setValidity("editable",!0),o.$setValidity("parse",!0),y(a,{$item:f,$model:e,$label:J.viewMapper(a,h)}),O(),K.$eval(c.typeaheadFocusOnSelect)!==!1&&g(function(){b[0].focus()},0,!1)},b.bind("keydown",function(a){if(0!==K.matches.length&&-1!==q.indexOf(a.which)){if(-1===K.activeIdx&&(9===a.which||13===a.which))return O(),void K.$digest();a.preventDefault(),40===a.which?(K.activeIdx=(K.activeIdx+1)%K.matches.length,K.$digest()):38===a.which?(K.activeIdx=(K.activeIdx>0?K.activeIdx:K.matches.length)-1,K.$digest()):13===a.which||9===a.which?K.$apply(function(){K.select(K.activeIdx)}):27===a.which&&(a.stopPropagation(),O(),K.$digest())}}),b.bind("blur",function(){z&&K.matches.length&&-1!==K.activeIdx&&!u&&(u=!0,K.$apply(function(){K.select(K.activeIdx)})),t=!1,u=!1});var W=function(a){b[0]!==a.target&&3!==a.which&&0!==K.matches.length&&(O(),j.$$phase||K.$digest())};h.bind("click",W),a.$on("$destroy",function(){h.unbind("click",W),(C||D)&&X.remove(),C&&(angular.element(i).unbind("resize",m),h.find("body").unbind("scroll",m)),N.remove()});var X=d(N)(K);C?h.find("body").append(X):D!==!1?angular.element(h[0].getElementById(D)).append(X):b.after(X),this.init=function(b,c){o=b,p=c,o.$parsers.unshift(function(b){return t=!0,0===s||b&&b.length>=s?v>0?(V(),U(b)):R(b):(x(a,!1),V(),O()),w?b:b?void o.$setValidity("editable",!1):(o.$setValidity("editable",!0),null)}),o.$formatters.push(function(b){var c,d,e={};return w||o.$setValidity("editable",!0),B?(e.$model=b,B(a,e)):(e[J.itemName]=b,c=J.viewMapper(a,e),e[J.itemName]=void 0,d=J.viewMapper(a,e),c!==d?c:b)})}}]).directive("uibTypeahead",function(){return{controller:"UibTypeaheadController",require:["ngModel","^?ngModelOptions","uibTypeahead"],link:function(a,b,c,d){d[2].init(d[0],d[1])}}}).directive("uibTypeaheadPopup",function(){return{scope:{matches:"=",query:"=",active:"=",position:"&",moveInProgress:"=",select:"&"},replace:!0,templateUrl:function(a,b){return b.popupTemplateUrl||"template/typeahead/typeahead-popup.html"},link:function(a,b,c){a.templateUrl=c.templateUrl,a.isOpen=function(){return a.matches.length>0},a.isActive=function(b){return a.active==b},a.selectActive=function(b){a.active=b},a.selectMatch=function(b){a.select({activeIdx:b})}}}}).directive("uibTypeaheadMatch",["$templateRequest","$compile","$parse",function(a,b,c){return{scope:{index:"=",match:"=",query:"="},link:function(d,e,f){var g=c(f.templateUrl)(d.$parent)||"template/typeahead/typeahead-match.html";a(g).then(function(a){b(a.trim())(d,function(a){e.replaceWith(a)})})}}}]).filter("uibTypeaheadHighlight",["$sce","$injector","$log",function(a,b,c){function d(a){return a.replace(/([.?*+^$[\]\\(){}|-])/g,"\\$1")}function e(a){return/<.*>/g.test(a)}var f;return f=b.has("$sanitize"),function(b,g){return!f&&e(b)&&c.warn("Unsafe use of typeahead please use ngSanitize"),b=g?(""+b).replace(new RegExp(d(g),"gi"),"<strong>$&</strong>"):b,f||(b=a.trustAsHtml(b)),b}}]),angular.module("ui.bootstrap.typeahead").value("$typeaheadSuppressWarning",!1).service("typeaheadParser",["$parse","uibTypeaheadParser","$log","$typeaheadSuppressWarning",function(a,b,c,d){return d||c.warn("typeaheadParser is now deprecated. Use uibTypeaheadParser instead."),b}]).directive("typeahead",["$compile","$parse","$q","$timeout","$document","$window","$rootScope","$uibPosition","typeaheadParser","$log","$typeaheadSuppressWarning",function(a,b,c,d,e,f,g,h,i,j,k){var l=[9,13,27,38,40],m=200;return{require:["ngModel","^?ngModelOptions"],link:function(n,o,p,q){function r(){N.moveInProgress||(N.moveInProgress=!0,N.$digest()),V&&d.cancel(V),V=d(function(){N.matches.length&&s(),N.moveInProgress=!1},m)}function s(){N.position=F?h.offset(o):h.position(o),N.position.top+=o.prop("offsetHeight")}k||j.warn("typeahead is now deprecated. Use uib-typeahead instead.");var t=q[0],u=q[1],v=n.$eval(p.typeaheadMinLength);v||0===v||(v=1);var w,x,y=n.$eval(p.typeaheadWaitMs)||0,z=n.$eval(p.typeaheadEditable)!==!1,A=b(p.typeaheadLoading).assign||angular.noop,B=b(p.typeaheadOnSelect),C=angular.isDefined(p.typeaheadSelectOnBlur)?n.$eval(p.typeaheadSelectOnBlur):!1,D=b(p.typeaheadNoResults).assign||angular.noop,E=p.typeaheadInputFormatter?b(p.typeaheadInputFormatter):void 0,F=p.typeaheadAppendToBody?n.$eval(p.typeaheadAppendToBody):!1,G=p.typeaheadAppendToElementId||!1,H=n.$eval(p.typeaheadFocusFirst)!==!1,I=p.typeaheadSelectOnExact?n.$eval(p.typeaheadSelectOnExact):!1,J=b(p.ngModel),K=b(p.ngModel+"($$$p)"),L=function(a,b){return angular.isFunction(J(n))&&u&&u.$options&&u.$options.getterSetter?K(a,{$$$p:b}):J.assign(a,b)},M=i.parse(p.typeahead),N=n.$new(),O=n.$on("$destroy",function(){N.$destroy()});N.$on("$destroy",O);var P="typeahead-"+N.$id+"-"+Math.floor(1e4*Math.random());o.attr({"aria-autocomplete":"list","aria-expanded":!1,"aria-owns":P});var Q=angular.element("<div typeahead-popup></div>");Q.attr({id:P,matches:"matches",active:"activeIdx",select:"select(activeIdx)","move-in-progress":"moveInProgress",query:"query",position:"position"}),angular.isDefined(p.typeaheadTemplateUrl)&&Q.attr("template-url",p.typeaheadTemplateUrl),angular.isDefined(p.typeaheadPopupTemplateUrl)&&Q.attr("popup-template-url",p.typeaheadPopupTemplateUrl);var R=function(){N.matches=[],N.activeIdx=-1,o.attr("aria-expanded",!1)},S=function(a){return P+"-option-"+a};N.$watch("activeIdx",function(a){0>a?o.removeAttr("aria-activedescendant"):o.attr("aria-activedescendant",S(a))});var T=function(a,b){return N.matches.length>b&&a?a.toUpperCase()===N.matches[b].label.toUpperCase():!1},U=function(a){var b={$viewValue:a};A(n,!0),D(n,!1),c.when(M.source(n,b)).then(function(c){var d=a===t.$viewValue;if(d&&w)if(c&&c.length>0){N.activeIdx=H?0:-1,D(n,!1),N.matches.length=0;for(var e=0;e<c.length;e++)b[M.itemName]=c[e],N.matches.push({id:S(e),label:M.viewMapper(N,b),model:c[e]});N.query=a,s(),o.attr("aria-expanded",!0),I&&1===N.matches.length&&T(a,0)&&N.select(0)}else R(),D(n,!0);d&&A(n,!1)},function(){R(),A(n,!1),D(n,!0)})};F&&(angular.element(f).bind("resize",r),e.find("body").bind("scroll",r));var V;N.moveInProgress=!1,R(),N.query=void 0;var W,X=function(a){W=d(function(){U(a)},y)},Y=function(){W&&d.cancel(W)};t.$parsers.unshift(function(a){return w=!0,0===v||a&&a.length>=v?y>0?(Y(),X(a)):U(a):(A(n,!1),Y(),R()),z?a:a?void t.$setValidity("editable",!1):(t.$setValidity("editable",!0),null)}),t.$formatters.push(function(a){var b,c,d={};return z||t.$setValidity("editable",!0),E?(d.$model=a,E(n,d)):(d[M.itemName]=a,b=M.viewMapper(n,d),d[M.itemName]=void 0,c=M.viewMapper(n,d),b!==c?b:a)}),N.select=function(a){var b,c,e={};x=!0,e[M.itemName]=c=N.matches[a].model,b=M.modelMapper(n,e),L(n,b),t.$setValidity("editable",!0),t.$setValidity("parse",!0),B(n,{$item:c,$model:b,$label:M.viewMapper(n,e)}),R(),N.$eval(p.typeaheadFocusOnSelect)!==!1&&d(function(){o[0].focus()},0,!1)},o.bind("keydown",function(a){if(0!==N.matches.length&&-1!==l.indexOf(a.which)){if(-1===N.activeIdx&&(9===a.which||13===a.which))return R(),void N.$digest();a.preventDefault(),40===a.which?(N.activeIdx=(N.activeIdx+1)%N.matches.length,N.$digest()):38===a.which?(N.activeIdx=(N.activeIdx>0?N.activeIdx:N.matches.length)-1,N.$digest()):13===a.which||9===a.which?N.$apply(function(){N.select(N.activeIdx)}):27===a.which&&(a.stopPropagation(),R(),N.$digest())}}),o.bind("blur",function(){C&&N.matches.length&&-1!==N.activeIdx&&!x&&(x=!0,N.$apply(function(){N.select(N.activeIdx)})),w=!1,x=!1});var Z=function(a){o[0]!==a.target&&3!==a.which&&0!==N.matches.length&&(R(),g.$$phase||N.$digest())};e.bind("click",Z),n.$on("$destroy",function(){e.unbind("click",Z),(F||G)&&$.remove(),F&&(angular.element(f).unbind("resize",r),e.find("body").unbind("scroll",r)),Q.remove()});var $=a(Q)(N);F?e.find("body").append($):G!==!1?angular.element(e[0].getElementById(G)).append($):o.after($)}}}]).directive("typeaheadPopup",["$typeaheadSuppressWarning","$log",function(a,b){return{scope:{matches:"=",query:"=",active:"=",position:"&",moveInProgress:"=",select:"&"},replace:!0,templateUrl:function(a,b){return b.popupTemplateUrl||"template/typeahead/typeahead-popup.html"},link:function(c,d,e){a||b.warn("typeahead-popup is now deprecated. Use uib-typeahead-popup instead."),c.templateUrl=e.templateUrl,c.isOpen=function(){return c.matches.length>0},c.isActive=function(a){return c.active==a},c.selectActive=function(a){c.active=a},c.selectMatch=function(a){c.select({activeIdx:a})}}}}]).directive("typeaheadMatch",["$templateRequest","$compile","$parse","$typeaheadSuppressWarning","$log",function(a,b,c,d,e){return{restrict:"EA",scope:{index:"=",match:"=",query:"="},link:function(f,g,h){d||e.warn("typeahead-match is now deprecated. Use uib-typeahead-match instead.");var i=c(h.templateUrl)(f.$parent)||"template/typeahead/typeahead-match.html";a(i).then(function(a){b(a.trim())(f,function(a){g.replaceWith(a)})})}}}]).filter("typeaheadHighlight",["$sce","$injector","$log","$typeaheadSuppressWarning",function(a,b,c,d){function e(a){return a.replace(/([.?*+^$[\]\\(){}|-])/g,"\\$1")}function f(a){return/<.*>/g.test(a)}var g;return g=b.has("$sanitize"),function(b,h){return d||c.warn("typeaheadHighlight is now deprecated. Use uibTypeaheadHighlight instead."),!g&&f(b)&&c.warn("Unsafe use of typeahead please use ngSanitize"),b=h?(""+b).replace(new RegExp(e(h),"gi"),"<strong>$&</strong>"):b,g||(b=a.trustAsHtml(b)),b}}]),angular.module("template/accordion/accordion-group.html",[]).run(["$templateCache",function(a){a.put("template/accordion/accordion-group.html",'<div class="panel {{panelClass || \'panel-default\'}}">\n  <div class="panel-heading" ng-keypress="toggleOpen($event)">\n    <h4 class="panel-title">\n      <a href tabindex="0" class="accordion-toggle" ng-click="toggleOpen()" uib-accordion-transclude="heading"><span ng-class="{\'text-muted\': isDisabled}">{{heading}}</span></a>\n    </h4>\n  </div>\n  <div class="panel-collapse collapse" uib-collapse="!isOpen">\n	  <div class="panel-body" ng-transclude></div>\n  </div>\n</div>\n')}]),angular.module("template/accordion/accordion.html",[]).run(["$templateCache",function(a){a.put("template/accordion/accordion.html",'<div class="panel-group" ng-transclude></div>')}]),angular.module("template/alert/alert.html",[]).run(["$templateCache",function(a){a.put("template/alert/alert.html",'<div class="alert" ng-class="[\'alert-\' + (type || \'warning\'), closeable ? \'alert-dismissible\' : null]" role="alert">\n    <button ng-show="closeable" type="button" class="close" ng-click="close({$event: $event})">\n        <span aria-hidden="true">&times;</span>\n        <span class="sr-only">Close</span>\n    </button>\n    <div ng-transclude></div>\n</div>\n')}]),angular.module("template/carousel/carousel.html",[]).run(["$templateCache",function(a){a.put("template/carousel/carousel.html",'<div ng-mouseenter="pause()" ng-mouseleave="play()" class="carousel" ng-swipe-right="prev()" ng-swipe-left="next()">\n  <div class="carousel-inner" ng-transclude></div>\n  <a role="button" href class="left carousel-control" ng-click="prev()" ng-show="slides.length > 1">\n    <span aria-hidden="true" class="glyphicon glyphicon-chevron-left"></span>\n    <span class="sr-only">previous</span>\n  </a>\n  <a role="button" href class="right carousel-control" ng-click="next()" ng-show="slides.length > 1">\n    <span aria-hidden="true" class="glyphicon glyphicon-chevron-right"></span>\n    <span class="sr-only">next</span>\n  </a>\n  <ol class="carousel-indicators" ng-show="slides.length > 1">\n    <li ng-repeat="slide in slides | orderBy:indexOfSlide track by $index" ng-class="{ active: isActive(slide) }" ng-click="select(slide)">\n      <span class="sr-only">slide {{ $index + 1 }} of {{ slides.length }}<span ng-if="isActive(slide)">, currently active</span></span>\n    </li>\n  </ol>\n</div>')}]),angular.module("template/carousel/slide.html",[]).run(["$templateCache",function(a){a.put("template/carousel/slide.html",'<div ng-class="{\n    \'active\': active\n  }" class="item text-center" ng-transclude></div>\n')}]),angular.module("template/datepicker/datepicker.html",[]).run(["$templateCache",function(a){a.put("template/datepicker/datepicker.html",'<div ng-switch="datepickerMode" role="application" ng-keydown="keydown($event)">\n  <uib-daypicker ng-switch-when="day" tabindex="0"></uib-daypicker>\n  <uib-monthpicker ng-switch-when="month" tabindex="0"></uib-monthpicker>\n  <uib-yearpicker ng-switch-when="year" tabindex="0"></uib-yearpicker>\n</div>')}]),angular.module("template/datepicker/day.html",[]).run(["$templateCache",function(a){a.put("template/datepicker/day.html",'<table role="grid" aria-labelledby="{{::uniqueId}}-title" aria-activedescendant="{{activeDateId}}">\n  <thead>\n    <tr>\n      <th><button type="button" class="btn btn-default btn-sm pull-left" ng-click="move(-1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-left"></i></button></th>\n      <th colspan="{{::5 + showWeeks}}"><button id="{{::uniqueId}}-title" role="heading" aria-live="assertive" aria-atomic="true" type="button" class="btn btn-default btn-sm" ng-click="toggleMode()" ng-disabled="datepickerMode === maxMode" tabindex="-1" style="width:100%;"><strong>{{title}}</strong></button></th>\n      <th><button type="button" class="btn btn-default btn-sm pull-right" ng-click="move(1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-right"></i></button></th>\n    </tr>\n    <tr>\n      <th ng-if="showWeeks" class="text-center"></th>\n      <th ng-repeat="label in ::labels track by $index" class="text-center"><small aria-label="{{::label.full}}">{{::label.abbr}}</small></th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr ng-repeat="row in rows track by $index">\n      <td ng-if="showWeeks" class="text-center h6"><em>{{ weekNumbers[$index] }}</em></td>\n      <td ng-repeat="dt in row track by dt.date" class="text-center" role="gridcell" id="{{::dt.uid}}" ng-class="::dt.customClass">\n        <button type="button" style="min-width:100%;" class="btn btn-default btn-sm" ng-class="{\'btn-info\': dt.selected, active: isActive(dt)}" ng-click="select(dt.date)" ng-disabled="dt.disabled" tabindex="-1"><span ng-class="::{\'text-muted\': dt.secondary, \'text-info\': dt.current}">{{::dt.label}}</span></button>\n      </td>\n    </tr>\n  </tbody>\n</table>\n')}]),angular.module("template/datepicker/month.html",[]).run(["$templateCache",function(a){a.put("template/datepicker/month.html",'<table role="grid" aria-labelledby="{{::uniqueId}}-title" aria-activedescendant="{{activeDateId}}">\n  <thead>\n    <tr>\n      <th><button type="button" class="btn btn-default btn-sm pull-left" ng-click="move(-1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-left"></i></button></th>\n      <th><button id="{{::uniqueId}}-title" role="heading" aria-live="assertive" aria-atomic="true" type="button" class="btn btn-default btn-sm" ng-click="toggleMode()" ng-disabled="datepickerMode === maxMode" tabindex="-1" style="width:100%;"><strong>{{title}}</strong></button></th>\n      <th><button type="button" class="btn btn-default btn-sm pull-right" ng-click="move(1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-right"></i></button></th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr ng-repeat="row in rows track by $index">\n      <td ng-repeat="dt in row track by dt.date" class="text-center" role="gridcell" id="{{::dt.uid}}" ng-class="::dt.customClass">\n        <button type="button" style="min-width:100%;" class="btn btn-default" ng-class="{\'btn-info\': dt.selected, active: isActive(dt)}" ng-click="select(dt.date)" ng-disabled="dt.disabled" tabindex="-1"><span ng-class="::{\'text-info\': dt.current}">{{::dt.label}}</span></button>\n      </td>\n    </tr>\n  </tbody>\n</table>\n')}]),angular.module("template/datepicker/popup.html",[]).run(["$templateCache",function(a){a.put("template/datepicker/popup.html",'<ul class="dropdown-menu" dropdown-nested ng-if="isOpen" style="display: block" ng-style="{top: position.top+\'px\', left: position.left+\'px\'}" ng-keydown="keydown($event)" ng-click="$event.stopPropagation()">\n	<li ng-transclude></li>\n	<li ng-if="showButtonBar" style="padding:10px 9px 2px">\n		<span class="btn-group pull-left">\n			<button type="button" class="btn btn-sm btn-info" ng-click="select(\'today\')" ng-disabled="isDisabled(\'today\')">{{ getText(\'current\') }}</button>\n			<button type="button" class="btn btn-sm btn-danger" ng-click="select(null)">{{ getText(\'clear\') }}</button>\n		</span>\n		<button type="button" class="btn btn-sm btn-success pull-right" ng-click="close()">{{ getText(\'close\') }}</button>\n	</li>\n</ul>\n')}]),angular.module("template/datepicker/year.html",[]).run(["$templateCache",function(a){a.put("template/datepicker/year.html",'<table role="grid" aria-labelledby="{{::uniqueId}}-title" aria-activedescendant="{{activeDateId}}">\n  <thead>\n    <tr>\n      <th><button type="button" class="btn btn-default btn-sm pull-left" ng-click="move(-1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-left"></i></button></th>\n      <th colspan="3"><button id="{{::uniqueId}}-title" role="heading" aria-live="assertive" aria-atomic="true" type="button" class="btn btn-default btn-sm" ng-click="toggleMode()" ng-disabled="datepickerMode === maxMode" tabindex="-1" style="width:100%;"><strong>{{title}}</strong></button></th>\n      <th><button type="button" class="btn btn-default btn-sm pull-right" ng-click="move(1)" tabindex="-1"><i class="glyphicon glyphicon-chevron-right"></i></button></th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr ng-repeat="row in rows track by $index">\n      <td ng-repeat="dt in row track by dt.date" class="text-center" role="gridcell" id="{{::dt.uid}}" ng-class="::dt.customClass">\n        <button type="button" style="min-width:100%;" class="btn btn-default" ng-class="{\'btn-info\': dt.selected, active: isActive(dt)}" ng-click="select(dt.date)" ng-disabled="dt.disabled" tabindex="-1"><span ng-class="::{\'text-info\': dt.current}">{{::dt.label}}</span></button>\n      </td>\n    </tr>\n  </tbody>\n</table>\n')}]),angular.module("template/modal/backdrop.html",[]).run(["$templateCache",function(a){a.put("template/modal/backdrop.html",'<div uib-modal-animation-class="fade"\n     modal-in-class="in"\n     ng-style="{\'z-index\': 1040 + (index && 1 || 0) + index*10}"\n></div>\n')}]),angular.module("template/modal/window.html",[]).run(["$templateCache",function(a){a.put("template/modal/window.html",'<div modal-render="{{$isRendered}}" tabindex="-1" role="dialog" class="modal"\n    uib-modal-animation-class="fade"\n    modal-in-class="in"\n    ng-style="{\'z-index\': 1050 + index*10, display: \'block\'}">\n    <div class="modal-dialog" ng-class="size ? \'modal-\' + size : \'\'"><div class="modal-content" uib-modal-transclude></div></div>\n</div>\n')}]),angular.module("template/pagination/pager.html",[]).run(["$templateCache",function(a){a.put("template/pagination/pager.html",'<ul class="pager">\n  <li ng-class="{disabled: noPrevious()||ngDisabled, previous: align}"><a href ng-click="selectPage(page - 1, $event)">{{::getText(\'previous\')}}</a></li>\n  <li ng-class="{disabled: noNext()||ngDisabled, next: align}"><a href ng-click="selectPage(page + 1, $event)">{{::getText(\'next\')}}</a></li>\n</ul>\n')}]),angular.module("template/pagination/pagination.html",[]).run(["$templateCache",function(a){a.put("template/pagination/pagination.html",'<ul class="pagination">\n  <li ng-if="::boundaryLinks" ng-class="{disabled: noPrevious()||ngDisabled}" class="pagination-first"><a href ng-click="selectPage(1, $event)">{{::getText(\'first\')}}</a></li>\n  <li ng-if="::directionLinks" ng-class="{disabled: noPrevious()||ngDisabled}" class="pagination-prev"><a href ng-click="selectPage(page - 1, $event)">{{::getText(\'previous\')}}</a></li>\n  <li ng-repeat="page in pages track by $index" ng-class="{active: page.active,disabled: ngDisabled&&!page.active}" class="pagination-page"><a href ng-click="selectPage(page.number, $event)">{{page.text}}</a></li>\n  <li ng-if="::directionLinks" ng-class="{disabled: noNext()||ngDisabled}" class="pagination-next"><a href ng-click="selectPage(page + 1, $event)">{{::getText(\'next\')}}</a></li>\n  <li ng-if="::boundaryLinks" ng-class="{disabled: noNext()||ngDisabled}" class="pagination-last"><a href ng-click="selectPage(totalPages, $event)">{{::getText(\'last\')}}</a></li>\n</ul>\n')}]),angular.module("template/tooltip/tooltip-html-popup.html",[]).run(["$templateCache",function(a){a.put("template/tooltip/tooltip-html-popup.html",'<div\n  tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="tooltip-arrow"></div>\n  <div class="tooltip-inner" ng-bind-html="contentExp()"></div>\n</div>\n')}]),angular.module("template/tooltip/tooltip-popup.html",[]).run(["$templateCache",function(a){a.put("template/tooltip/tooltip-popup.html",'<div\n  tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="tooltip-arrow"></div>\n  <div class="tooltip-inner" ng-bind="content"></div>\n</div>\n')}]),angular.module("template/tooltip/tooltip-template-popup.html",[]).run(["$templateCache",function(a){a.put("template/tooltip/tooltip-template-popup.html",'<div\n  tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="tooltip-arrow"></div>\n  <div class="tooltip-inner"\n    uib-tooltip-template-transclude="contentExp()"\n    tooltip-template-transclude-scope="originScope()"></div>\n</div>\n')}]),angular.module("template/popover/popover-html.html",[]).run(["$templateCache",function(a){a.put("template/popover/popover-html.html",'<div tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="arrow"></div>\n\n  <div class="popover-inner">\n      <h3 class="popover-title" ng-bind="title" ng-if="title"></h3>\n      <div class="popover-content" ng-bind-html="contentExp()"></div>\n  </div>\n</div>\n')}]),angular.module("template/popover/popover-template.html",[]).run(["$templateCache",function(a){a.put("template/popover/popover-template.html",'<div tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="arrow"></div>\n\n  <div class="popover-inner">\n      <h3 class="popover-title" ng-bind="title" ng-if="title"></h3>\n      <div class="popover-content"\n        uib-tooltip-template-transclude="contentExp()"\n        tooltip-template-transclude-scope="originScope()"></div>\n  </div>\n</div>\n')}]),angular.module("template/popover/popover.html",[]).run(["$templateCache",function(a){a.put("template/popover/popover.html",'<div tooltip-animation-class="fade"\n  uib-tooltip-classes\n  ng-class="{ in: isOpen() }">\n  <div class="arrow"></div>\n\n  <div class="popover-inner">\n      <h3 class="popover-title" ng-bind="title" ng-if="title"></h3>\n      <div class="popover-content" ng-bind="content"></div>\n  </div>\n</div>\n')}]),angular.module("template/progressbar/bar.html",[]).run(["$templateCache",function(a){a.put("template/progressbar/bar.html",'<div class="progress-bar" ng-class="type && \'progress-bar-\' + type" role="progressbar" aria-valuenow="{{value}}" aria-valuemin="0" aria-valuemax="{{max}}" ng-style="{width: (percent < 100 ? percent : 100) + \'%\'}" aria-valuetext="{{percent | number:0}}%" aria-labelledby="{{::title}}" style="min-width: 0;" ng-transclude></div>\n')}]),angular.module("template/progressbar/progress.html",[]).run(["$templateCache",function(a){a.put("template/progressbar/progress.html",'<div class="progress" ng-transclude aria-labelledby="{{::title}}"></div>')}]),angular.module("template/progressbar/progressbar.html",[]).run(["$templateCache",function(a){a.put("template/progressbar/progressbar.html",'<div class="progress">\n  <div class="progress-bar" ng-class="type && \'progress-bar-\' + type" role="progressbar" aria-valuenow="{{value}}" aria-valuemin="0" aria-valuemax="{{max}}" ng-style="{width: (percent < 100 ? percent : 100) + \'%\'}" aria-valuetext="{{percent | number:0}}%" aria-labelledby="{{::title}}" style="min-width: 0;" ng-transclude></div>\n</div>\n')}]),angular.module("template/rating/rating.html",[]).run(["$templateCache",function(a){a.put("template/rating/rating.html",'<span ng-mouseleave="reset()" ng-keydown="onKeydown($event)" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="{{range.length}}" aria-valuenow="{{value}}">\n    <span ng-repeat-start="r in range track by $index" class="sr-only">({{ $index < value ? \'*\' : \' \' }})</span>\n    <i ng-repeat-end ng-mouseenter="enter($index + 1)" ng-click="rate($index + 1)" class="glyphicon" ng-class="$index < value && (r.stateOn || \'glyphicon-star\') || (r.stateOff || \'glyphicon-star-empty\')" ng-attr-title="{{r.title}}" aria-valuetext="{{r.title}}"></i>\n</span>\n');
+}]),angular.module("template/tabs/tab.html",[]).run(["$templateCache",function(a){a.put("template/tabs/tab.html",'<li ng-class="{active: active, disabled: disabled}">\n  <a href ng-click="select()" uib-tab-heading-transclude>{{heading}}</a>\n</li>\n')}]),angular.module("template/tabs/tabset.html",[]).run(["$templateCache",function(a){a.put("template/tabs/tabset.html",'<div>\n  <ul class="nav nav-{{type || \'tabs\'}}" ng-class="{\'nav-stacked\': vertical, \'nav-justified\': justified}" ng-transclude></ul>\n  <div class="tab-content">\n    <div class="tab-pane" \n         ng-repeat="tab in tabs" \n         ng-class="{active: tab.active}"\n         uib-tab-content-transclude="tab">\n    </div>\n  </div>\n</div>\n')}]),angular.module("template/timepicker/timepicker.html",[]).run(["$templateCache",function(a){a.put("template/timepicker/timepicker.html",'<table>\n  <tbody>\n    <tr class="text-center" ng-show="::showSpinners">\n      <td><a ng-click="incrementHours()" ng-class="{disabled: noIncrementHours()}" class="btn btn-link" ng-disabled="noIncrementHours()" tabindex="{{::tabindex}}"><span class="glyphicon glyphicon-chevron-up"></span></a></td>\n      <td>&nbsp;</td>\n      <td><a ng-click="incrementMinutes()" ng-class="{disabled: noIncrementMinutes()}" class="btn btn-link" ng-disabled="noIncrementMinutes()" tabindex="{{::tabindex}}"><span class="glyphicon glyphicon-chevron-up"></span></a></td>\n      <td ng-show="showMeridian"></td>\n    </tr>\n    <tr>\n      <td class="form-group" ng-class="{\'has-error\': invalidHours}">\n        <input style="width:50px;" type="text" ng-model="hours" ng-change="updateHours()" class="form-control text-center" ng-readonly="::readonlyInput" maxlength="2" tabindex="{{::tabindex}}">\n      </td>\n      <td>:</td>\n      <td class="form-group" ng-class="{\'has-error\': invalidMinutes}">\n        <input style="width:50px;" type="text" ng-model="minutes" ng-change="updateMinutes()" class="form-control text-center" ng-readonly="::readonlyInput" maxlength="2" tabindex="{{::tabindex}}">\n      </td>\n      <td ng-show="showMeridian"><button type="button" ng-class="{disabled: noToggleMeridian()}" class="btn btn-default text-center" ng-click="toggleMeridian()" ng-disabled="noToggleMeridian()" tabindex="{{::tabindex}}">{{meridian}}</button></td>\n    </tr>\n    <tr class="text-center" ng-show="::showSpinners">\n      <td><a ng-click="decrementHours()" ng-class="{disabled: noDecrementHours()}" class="btn btn-link" ng-disabled="noDecrementHours()" tabindex="{{::tabindex}}"><span class="glyphicon glyphicon-chevron-down"></span></a></td>\n      <td>&nbsp;</td>\n      <td><a ng-click="decrementMinutes()" ng-class="{disabled: noDecrementMinutes()}" class="btn btn-link" ng-disabled="noDecrementMinutes()" tabindex="{{::tabindex}}"><span class="glyphicon glyphicon-chevron-down"></span></a></td>\n      <td ng-show="showMeridian"></td>\n    </tr>\n  </tbody>\n</table>\n')}]),angular.module("template/typeahead/typeahead-match.html",[]).run(["$templateCache",function(a){a.put("template/typeahead/typeahead-match.html",'<a href tabindex="-1" ng-bind-html="match.label | uibTypeaheadHighlight:query"></a>\n')}]),angular.module("template/typeahead/typeahead-popup.html",[]).run(["$templateCache",function(a){a.put("template/typeahead/typeahead-popup.html",'<ul class="dropdown-menu" ng-show="isOpen() && !moveInProgress" ng-style="{top: position().top+\'px\', left: position().left+\'px\'}" style="display: block;" role="listbox" aria-hidden="{{!isOpen()}}">\n    <li ng-repeat="match in matches track by $index" ng-class="{active: isActive($index) }" ng-mouseenter="selectActive($index)" ng-click="selectMatch($index)" role="option" id="{{::match.id}}">\n        <div uib-typeahead-match index="$index" match="match" query="query" template-url="templateUrl"></div>\n    </li>\n</ul>\n')}]),!angular.$$csp()&&angular.element(document).find("head").prepend('<style type="text/css">.ng-animate.item:not(.left):not(.right){-webkit-transition:0s ease-in-out left;transition:0s ease-in-out left}</style>');
