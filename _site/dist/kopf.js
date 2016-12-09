@@ -1222,7 +1222,7 @@ kopf.controller('GlobalController', ['$scope', '$location', '$sce', '$window',
   function($scope, $location, $sce, $window, AlertService, ElasticService,
            ExternalSettingsService, PageService) {
 
-    $scope.version = '2.1.2';
+    $scope.version = '5.0.0';
 
     $scope.modal = new ModalControls();
 
@@ -3259,7 +3259,8 @@ function Node(nodeId, nodeStats, nodeInfo) {
 
   this.cpu = getProperty(this.stats, 'process.cpu.percent');
 
-  this.load_average = getProperty(this.stats, 'os.load_average');
+  var loadAverage = getProperty(this.stats, 'os.cpu.load_average');
+  this.load_average = loadAverage['1m'];
 
   this.setCurrentMaster = function() {
     this.current_master = true;
@@ -4705,7 +4706,7 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
      */
     this.createIndex = function(name, settings, success, error) {
       var path = '/' + encode(name);
-      this.clusterRequest('POST', path, {}, settings, success, error);
+      this.clusterRequest('PUT', path, {}, settings, success, error);
     };
 
     /**
