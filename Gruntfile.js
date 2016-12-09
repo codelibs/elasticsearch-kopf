@@ -51,6 +51,12 @@ module.exports = function(grunt) {
           {
             expand: true,
             flatten: true,
+            src: ['src/kopf/css/fess_style.css'],
+            dest: './_site/dist/'
+          },
+          {
+            expand: true,
+            flatten: true,
             src: ['src/kopf/css/light_style.css'],
             dest: './_site/dist/'
           }
@@ -65,13 +71,19 @@ module.exports = function(grunt) {
           'src/lib/angularjs/angular-route.min.js',
           'src/lib/ace/ace.js',
           'src/lib/jsontree/jsontree.min.js',
-          'src/lib/bootstrap/js/bootstrap.js'
+          'src/lib/bootstrap/js/bootstrap.js',
+          'src/lib/csv/csv.js',
+          'src/lib/csv/jquery.csv.js',
+          'src/lib/angular-tree-dnd/ng-tree-dnd.js',
+          'src/lib/angularjs/angular-animate.min.js',
+          'src/lib/typeahead/typeahead.js'
         ],
         dest: '_site/dist/lib.js'
       },
       vendorcss: {
         src: [
-          'src/lib/bootstrap/css/bootstrap.css'
+          'src/lib/bootstrap/css/bootstrap.css',
+          'src/lib/angular-tree-dnd/ng-tree-dnd.css'
         ],
         dest: '_site/dist/lib.css'
       },
@@ -90,10 +102,10 @@ module.exports = function(grunt) {
           'src/kopf/css/common.css',
           'src/kopf/css/aliases.css',
           'src/kopf/css/analysis.css',
+          'src/kopf/css/explain.css',
           'src/kopf/css/cluster_health.css',
           'src/kopf/css/cluster_overview.css',
           'src/kopf/css/gist_share.css',
-          'src/kopf/css/json_tree.css',
           'src/kopf/css/navbar.css',
           'src/kopf/css/rest_client.css',
           'src/kopf/css/warmers.css',
