@@ -1260,7 +1260,8 @@ kopf.controller('GlobalController', ['$scope', '$location', '$sce', '$window',
         if ($location.host() !== '') { // not opening from fs
           var location = $scope.readParameter('location');
           var url = $location.absUrl();
-          if (isDefined(location)) {
+          if (isDefined(location) ||
+              isDefined(location = ExternalSettingsService.getElasticsearchHost())) {
             host = location;
           } else if (url.indexOf('/_plugin/kopf') > -1) {
             host = url.substring(0, url.indexOf('/_plugin/kopf'));
@@ -1826,6 +1827,9 @@ kopf.controller('RestController', ['$scope', '$location', '$timeout',
       var method = $scope.request.method;
       var host = ElasticService.getHost();
       var path = encodeURI($scope.request.path);
+      if(path.substring(0,1) !== '/') {
+        path = '/' + path;
+      }
       var body = $scope.editor.getValue();
       var curl = 'curl -X' + method + ' \'' + host + path + '\'';
       if (['POST', 'PUT'].indexOf(method) >= 0) {
@@ -5319,7 +5323,7 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
         $http.get(host + '/_aliases', params),
         $http.get(host + '/_cluster/health', params),
         $http.get(host + '/_nodes/_all/os,jvm', params),
-        $http.get(host, params),
+        $http.get(host + '/', params),
       ]).then(
           function(responses) {
             try {
@@ -5562,6 +5566,8 @@ kopf.factory('ExternalSettingsService', ['DebugService',
 
     var KEY = 'kopfSettings';
 
+    var ES_HOST = 'location';
+
     var ES_ROOT_PATH = 'elasticsearch_root_path';
 
     var WITH_CREDENTIALS = 'with_credentials';
@@ -5611,6 +5617,10 @@ kopf.factory('ExternalSettingsService', ['DebugService',
         };
       });
       return settings;
+    };
+
+    this.getElasticsearchHost = function() {
+      return this.getSettings()[ES_HOST];
     };
 
     this.getElasticsearchRootPath = function() {
@@ -5772,7 +5782,6 @@ kopf.factory('PageService', ['ElasticService', 'DebugService', '$rootScope',
           context.globalCompositeOperation = 'source-in';
           context.fillStyle = color;
           context.fillRect(0, 0, 32, 32);
-          context.fill();
           this.link.type = 'image/x-icon';
           this.link.href = canvas.toDataURL();
         } catch (exception) {
