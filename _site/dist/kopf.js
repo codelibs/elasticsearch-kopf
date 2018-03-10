@@ -5155,14 +5155,16 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       var params = {};
       this.addAuth(params);
       $q.all([
-        $http.get(
-            host + '/' + encode(index) + '/_stats?level=shards&human',
-            params
-        ),
-        $http.get(
-            host + '/' + encode(index) + '/_recovery?active_only=true&human',
-            params
-        )
+        $http.get({
+            url: host + '/' + encode(index) + '/_stats?level=shards&human',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/' + encode(index) + '/_recovery?active_only=true&human',
+            data: params,
+            dataType: 'json'
+        })
       ]).then(
           function(responses) {
             try {
@@ -5293,7 +5295,7 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
 
     this.clusterRequest = function(method, path, params, data, success, error) {
       var url = this.connection.host + path;
-      var config = {method: method, url: url, data: data, params: params};
+      var config = {method: method, url: url, data: data, params: params, dataType: 'json'};
       this.addAuth(config);
       $http(config).
           success(function(data, status, headers, config) {
@@ -5317,15 +5319,46 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       var params = {};
       this.addAuth(params);
       $q.all([
-        $http.get(host + '/_cluster/state/master_node,routing_table,blocks/',
-            params),
-        $http.get(host + '/_stats/docs,store', params),
-        $http.get(host + '/_nodes/stats/jvm,fs,os,process', params),
-        $http.get(host + '/_cluster/settings', params),
-        $http.get(host + '/_aliases', params),
-        $http.get(host + '/_cluster/health', params),
-        $http.get(host + '/_nodes/_all/os,jvm', params),
-        $http.get(host + '/', params),
+        $http.get({
+            url: host + '/_cluster/state/master_node,routing_table,blocks/',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_stats/docs,store',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_nodes/stats/jvm,fs,os,process',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_cluster/settings',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_aliases',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_cluster/health',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_nodes/_all/os,jvm',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/',
+            data: params,
+            dataType: 'json'
+        }),
       ]).then(
           function(responses) {
             try {
@@ -5358,13 +5391,31 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       var params = {};
       this.addAuth(params);
       $q.all([
-        $http.get(host +
-            '/_cluster/state/master_node,blocks?local=true',
-            params),
-        $http.get(host + '/_nodes/stats/jvm,fs,os', params),
-        $http.get(host + '/_cluster/settings?local=true', params),
-        $http.get(host + '/_cluster/health?local=true', params),
-        $http.get(host + '/_nodes/_all/os,jvm', params)
+        $http.get({
+            url: host + '/_cluster/state/master_node,blocks?local=true',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_nodes/stats/jvm,fs,os',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_cluster/settings?local=true',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_cluster/health?local=true',
+            data: params,
+            dataType: 'json'
+        }),
+        $http.get({
+            url: host + '/_nodes/_all/os,jvm',
+            data: params,
+            dataType: 'json'
+        }),
       ]).then(
           function(responses) {
             try {
@@ -5398,16 +5449,28 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       this.addAuth(params);
       var requests = [];
       if (health) {
-        requests.push($http.get(host + '/_cluster/health', params));
+        requests.push($http.get({url: host + '/_cluster/health',
+            data: params,
+            dataType: 'json'
+        }));
       }
       if (state) {
-        requests.push($http.get(host + '/_cluster/state', params));
+        requests.push($http.get({url: host + '/_cluster/state',
+            data: params,
+            dataType: 'json'
+        }));
       }
       if (stats) {
-        requests.push($http.get(host + '/_nodes/stats?all=true', params));
+        requests.push($http.get({url: host + '/_nodes/stats?all=true',
+            data: params,
+            dataType: 'json'
+        }));
       }
       if (hotthreads) {
-        requests.push($http.get(host + '/_nodes/hot_threads', params));
+        requests.push($http.get({url: host + '/_nodes/hot_threads',
+            data: params,
+            dataType: 'json'
+        }));
       }
       $q.all(requests).then(
           function(responses) {
