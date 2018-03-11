@@ -66,7 +66,7 @@ module.exports = function(grunt) {
     concat: {
       vendorjs: {
         src: [
-          'src/lib/jquery/jquery-1.10.2.min.js',
+          'src/lib/jquery/jquery-1.12.4.min.js',
           'src/lib/angularjs/angular.min.js',
           'src/lib/angularjs/angular-route.min.js',
           'src/lib/ace/ace.js',
@@ -162,7 +162,7 @@ module.exports = function(grunt) {
   grunt.registerTask('dev', ['karma', 'watch'])
   grunt.registerTask('test', ['karma'])
   grunt.registerTask('build',
-      ['clean', 'jshint', 'qunit', 'copy', 'concat', 'jscs']);
+      ['clean', 'jshint', /*'qunit',*/ 'copy', 'concat', 'jscs']);
   grunt.registerTask('server',
-      ['clean', 'jshint', 'qunit', 'copy', 'concat', 'connect:server']);
+      ['clean', 'jshint', /*'qunit',*/ 'copy', 'concat', 'connect:server']);
 };
