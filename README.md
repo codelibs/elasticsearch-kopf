@@ -78,7 +78,7 @@ Screenshots
 ### header reflects cluster state
 ![cluster state](imgs/cluster_state.png)
 
-###REST Client
+### REST Client
 ![rest client](imgs/rest_client.png)
 
 ### aliases management
