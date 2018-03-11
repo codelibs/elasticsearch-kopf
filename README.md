@@ -18,7 +18,7 @@ Installation
 ------------
 You can either install a specific version(using its release tag) or the most up to date version from a given branch.
 
-###Run locally:
+### Run locally:
 
 ```bash
 git clone git://github.com/codelibs/elasticsearch-kopf.git
@@ -41,7 +41,7 @@ grunt server
 
 Browse to <http://localhost:9000/_site>.
 
-###Kopf behind a reverse proxy
+### Kopf behind a reverse proxy
 Example configuration for nginx:
 ```
 server {
@@ -72,26 +72,26 @@ Access kopf at http://localhost:8080/kopf/
 
 Screenshots
 ------------
-###cluster overview
+### cluster overview
 ![cluster overview](imgs/cluster_view.png)
 
-###header reflects cluster state
+### header reflects cluster state
 ![cluster state](imgs/cluster_state.png)
 
 ###REST Client
 ![rest client](imgs/rest_client.png)
 
-###aliases management
+### aliases management
 ![aliases management](imgs/aliases.png)
 
-###warmers management
+### warmers management
 ![warmers management](imgs/warmer.png)
 
-###percolator
+### percolator
 ![percolator](imgs/percolator.png)
 
-###snapshots management
+### snapshots management
 ![snapshots management](imgs/snapshot.png)
 
-###analysis api
+### analysis api
 ![analysis api](imgs/analysis.png)
