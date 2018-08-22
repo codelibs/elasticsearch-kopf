@@ -19,7 +19,6 @@ kopf.factory('PageService', ['ElasticService', 'DebugService', '$rootScope',
           return ElasticService.cluster;
         },
         function(cluster, oldValue) {
-          instance.setFavIconColor(cluster ? cluster.status : undefined);
           instance.setPageTitle(cluster ? cluster.name : undefined);
         }
     );
@@ -37,28 +36,6 @@ kopf.factory('PageService', ['ElasticService', 'DebugService', '$rootScope',
           $rootScope.title = 'kopf - no connection';
         }
         this.clusterName = name;
-      }
-    };
-
-    this.setFavIconColor = function(status) {
-      if (this.link && this.clusterStatus !== status) {
-        this.clusterStatus = status;
-        try {
-          var colors = {green: '#468847', yellow: '#c09853', red: '#B94A48'};
-          var color = status ? colors[status] : '#333';
-          var canvas = $document[0].createElement('canvas');
-          canvas.width = 32;
-          canvas.height = 32;
-          var context = canvas.getContext('2d');
-          context.drawImage(img, 0, 0);
-          context.globalCompositeOperation = 'source-in';
-          context.fillStyle = color;
-          context.fillRect(0, 0, 32, 32);
-          this.link.type = 'image/x-icon';
-          this.link.href = canvas.toDataURL();
-        } catch (exception) {
-          DebugService.debug('Error while changing favicon', exception);
-        }
       }
     };
 

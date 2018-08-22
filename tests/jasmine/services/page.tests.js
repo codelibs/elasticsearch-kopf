@@ -23,29 +23,24 @@ describe("PageService", function() {
     $scope = $rootScope;
   }));
 
-  it("should watch for cluster changes and update title and favicon",
+  it("should watch for cluster changes and update title",
       function() {
-        spyOn(PageService, 'setFavIconColor').andReturn(true);
         spyOn(PageService, 'setPageTitle').andReturn(true);
         ElasticService.cluster = {name: 'super cluster', status: 'green'};
         $scope.$digest();
-        expect(PageService.setFavIconColor).toHaveBeenCalledWith('green');
         expect(PageService.setPageTitle).toHaveBeenCalledWith('super cluster');
       });
 
-  it("should watch for disconnect with cluster and update title and favicon",
+  it("should watch for disconnect with cluster and update title",
       function() {
-        spyOn(PageService, 'setFavIconColor').andReturn(true);
         spyOn(PageService, 'setPageTitle').andReturn(true);
         ElasticService.cluster = undefined;
         $scope.$digest();
-        expect(PageService.setFavIconColor).toHaveBeenCalledWith(undefined);
         expect(PageService.setPageTitle).toHaveBeenCalledWith(undefined);
       });
 
-  it("should change title and favicon if changed",
+  it("should change title if changed",
       function() {
-        spyOn(PageService, 'setFavIconColor').andCallThrough(true);
         spyOn(PageService, 'setPageTitle').andCallThrough(true);
         PageService.link = {};
         ElasticService.cluster = {name: 'name1', status: 'status1'};
@@ -62,9 +57,8 @@ describe("PageService", function() {
         expect(PageService.clusterStatus).toEqual('status2');
       });
 
-  it("should preserver title and favicon if not changed",
+  it("should preserver title if not changed",
       function() {
-        spyOn(PageService, 'setFavIconColor').andCallThrough(true);
         spyOn(PageService, 'setPageTitle').andCallThrough(true);
         PageService.link = {};
         ElasticService.cluster = {name: 'name1', status: 'status1'};
