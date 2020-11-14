@@ -3493,7 +3493,7 @@ function Token(token, startOffset, endOffset, position) {
 }
 
 function Version(version) {
-  var checkVersion = new RegExp('(\\d)\\.(\\d)\\.(\\d)\\.*');
+  var checkVersion = new RegExp('(\\d+)\\.(\\d+)\\.(\\d+)\\.*');
   var major;
   var minor;
   var patch;
