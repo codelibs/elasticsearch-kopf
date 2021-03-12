@@ -3232,7 +3232,9 @@ function Node(nodeId, nodeStats, nodeInfo) {
 
   var roles = getProperty(nodeInfo, 'roles', []);
   this.master = roles.indexOf('master') < 0 ? false : true;
-  this.data = roles.indexOf('data') < 0 ? false : true;
+  this.data = (roles.indexOf('data') < 0 && roles.indexOf('data_content') < 0
+    && roles.indexOf('data_hot') < 0 && roles.indexOf('data_warm') < 0
+    && roles.indexOf('data_cold') < 0) ? false : true;
   this.client = !this.master && !this.data;
   this.current_master = false;
 
