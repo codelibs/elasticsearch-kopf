@@ -1,18 +1,21 @@
 kopf
 =======================
 
-kopf is a simple web administration tool for [elasticsearch](http://elastic.co) written in JavaScript + AngularJS + jQuery + Twitter bootstrap.
+kopf is a simple web administration tool for [OpenSearch](https://opensearch.org) and [Elasticsearch](http://elastic.co) written in JavaScript + AngularJS + jQuery + Twitter bootstrap.
 
-It offers an easy way of performing common tasks on an elasticsearch cluster. Not every single API is covered by this plugin, but it does offer a REST client which allows you to explore the full potential of the ElasticSearch API.
+It offers an easy way of performing common tasks on an OpenSearch/Elasticsearch cluster. Not every single API is covered by this plugin, but it does offer a REST client which allows you to explore the full potential of the OpenSearch/Elasticsearch API.
 
 Versions
 ------------
 
-| elasticsearch version | branch |
-| --------------------- | ------ |
-| 2.X                   | 2.0    |
-| 5.X                   | 5.x    |
-| 6.X                   | 6.x    |
+| OpenSearch/Elasticsearch version | branch |
+| -------------------------------- | ------ |
+| OpenSearch 2.X, 3.X              | master |
+| Elasticsearch 2.X                | 2.0    |
+| Elasticsearch 5.X                | 5.x    |
+| Elasticsearch 6.X                | 6.x    |
+
+Note: This version is maintained by CodeLibs for use with Fess 15, which supports OpenSearch 2 and OpenSearch 3.
 
 Installation
 ------------

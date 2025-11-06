@@ -95,7 +95,7 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
       var root = ExternalSettingsService.getElasticsearchRootPath();
       var withCredentials = ExternalSettingsService.withCredentials();
       this.connection = new ESConnection(host + root, withCredentials);
-      DebugService.debug('Elasticseach connection:', this.connection);
+      DebugService.debug('OpenSearch/Elasticsearch connection:', this.connection);
       this.clusterRequest('GET', '/', {}, {},
           function(data) {
             if (data.OK) { // detected https://github.com/Asquera/elasticsearch-http-basic
@@ -103,7 +103,11 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
               DebugService.debug('Attemping to connect with [' + host + '/]');
               instance.connect(host + '/');
             } else {
-              instance.setVersion(data.version.number);
+              var versionNumber = data.version.number;
+              var distribution = data.version.distribution || 'elasticsearch';
+              DebugService.debug('Connected to ' + distribution + ' version: ' + versionNumber);
+              instance.setVersion(versionNumber);
+              instance.distribution = distribution;
               instance.connected = true;
               if (!instance.autoRefreshStarted) {
                 instance.autoRefreshStarted = true;
@@ -116,7 +120,10 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
           function(data) {
             if (data.status == 503) {
               DebugService.debug('No active master, switching to basic mode');
-              instance.setVersion(data.version.number);
+              if (data.version && data.version.number) {
+                instance.setVersion(data.version.number);
+                instance.distribution = data.version.distribution || 'elasticsearch';
+              }
               instance.connected = true;
               instance.setBrokenCluster(true);
               AlertService.error('No active master, switching to basic mode');
@@ -137,8 +144,8 @@ kopf.factory('ElasticService', ['$http', '$q', '$timeout', '$location',
     this.setVersion = function(version) {
       this.version = new Version(version);
       if (!this.version.isValid()) {
-        DebugService.debug('Invalid Elasticsearch version[' + version + ']');
-        throw 'Invalid Elasticsearch version[' + version + ']';
+        DebugService.debug('Invalid OpenSearch/Elasticsearch version[' + version + ']');
+        throw 'Invalid OpenSearch/Elasticsearch version[' + version + ']';
       }
     };
 
